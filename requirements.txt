@@ -1,0 +1,9 @@
+fastapi>=0.110,<1
+uvicorn[standard]>=0.29,<1
+sqlalchemy[asyncio]>=2.0,<3
+aiosqlite>=0.20,<1
+pydantic[email]>=2.0,<3
+python-jose[cryptography]>=3.3,<4
+passlib[bcrypt]>=1.7,<2
+bcrypt>=4.0,<4.1
+python-multipart>=0.0.9
