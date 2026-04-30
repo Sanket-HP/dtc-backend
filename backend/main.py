@@ -27,9 +27,10 @@ app = FastAPI(
 
 # ── Allowed Frontend Origins ─────────────────────────────────────────
 ALLOWED_ORIGINS = [
-    "http://localhost:5500",            # local testing
+    "http://localhost:5500",
     "http://127.0.0.1:5500",
-    "https://dtc-frontend-tau.vercel.app",  # your deployed frontend
+    "https://dtc-frontend-tau.vercel.app",
+    "https://dtc-frontend-30p1bhi52-sanket-patils-projects-4418dbe1.vercel.app"
 ]
 
 
@@ -59,7 +60,7 @@ async def root():
     }
 
 
-# ── Health Check ─────────────────────────────────────────────────────
+# ── Health Check (used by Render) ────────────────────────────────────
 @app.get("/api/health")
 async def health():
     return {
