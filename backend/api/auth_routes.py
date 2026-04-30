@@ -114,7 +114,7 @@ async def forgot_password(email: str, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(User).where(User.email == email))
     user = result.scalars().first()
 
-    # Prevent email enumeration attack
+    # Always return success message for security
     if not user:
         return {"message": "If the email exists, a reset link has been generated"}
 
@@ -126,6 +126,7 @@ async def forgot_password(email: str, db: AsyncSession = Depends(get_db)):
 
     await db.commit()
 
+    # Temporary: return token for testing (remove later when email system added)
     return {
         "message": "Password reset token generated",
         "reset_token": reset_token
