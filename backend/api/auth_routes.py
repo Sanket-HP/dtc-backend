@@ -94,7 +94,10 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
 # GET CURRENT USER
 # -------------------------------
 @router.get("/me", response_model=UserResponse)
-async def get_current_user(user_id: str = Depends(get_current_user_id), db: AsyncSession = Depends(get_db)):
+async def get_current_user(
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db)
+):
 
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalars().first()
@@ -114,7 +117,7 @@ async def forgot_password(email: str, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(User).where(User.email == email))
     user = result.scalars().first()
 
-    # Always return success message for security
+    # Prevent email enumeration attack
     if not user:
         return {"message": "If the email exists, a reset link has been generated"}
 
@@ -126,7 +129,7 @@ async def forgot_password(email: str, db: AsyncSession = Depends(get_db)):
 
     await db.commit()
 
-    # Temporary: return token for testing (remove later when email system added)
+    # TEMP: return token for testing
     return {
         "message": "Password reset token generated",
         "reset_token": reset_token
@@ -150,13 +153,13 @@ async def reset_password(token: str, new_password: str, db: AsyncSession = Depen
 
     if not user:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=400,
             detail="Invalid reset token"
         )
 
     if user.reset_token_expiry and user.reset_token_expiry < datetime.now(timezone.utc):
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=400,
             detail="Reset token expired"
         )
 
