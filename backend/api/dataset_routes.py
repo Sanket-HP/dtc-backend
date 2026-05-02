@@ -1,123 +1,181 @@
-"""Dataset upload, listing, preview, and download routes."""
+"""Dataset upload, listing, preview, and download routes – Firebase version."""
 
 from __future__ import annotations
 
+import csv
+import io
 import json
-from pathlib import Path
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
-from fastapi.responses import FileResponse
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi.responses import JSONResponse
 
-from ..database import get_db
-from ..models.dataset import Dataset
-from ..models.user import User
-from ..services.dataset_service import (
-    process_and_store,
-    process_manual_input,
-    get_dataset_stats,
-)
-from .deps import get_current_user
-from .schemas import DatasetResponse, DatasetStatsResponse, ManualUploadRequest
+from ..firebase_config import db, bucket
+from .deps import get_current_user_id
 
 router = APIRouter(prefix="/datasets", tags=["datasets"])
 
 
-@router.post("/upload", response_model=DatasetResponse, status_code=201)
+# -------------------------------------------------
+# UPLOAD DATASET
+# -------------------------------------------------
+@router.post("/upload", status_code=201)
 async def upload_dataset(
     file: UploadFile = File(...),
     title: str = Form(...),
     description: str = Form(""),
     category: str = Form("general"),
-    user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    user_id: str = Depends(get_current_user_id),
 ):
+
     if not file.filename:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "No file provided")
-    raw = await file.read()
-    try:
-        ds = await process_and_store(
-            db, user.id, title, description, category, raw, file.filename
-        )
-    except ValueError as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc))
-    return ds
+
+    content = await file.read()
+
+    # Detect format
+    if file.filename.endswith(".csv"):
+        file_format = "csv"
+        text = content.decode()
+        reader = csv.DictReader(io.StringIO(text))
+        rows = list(reader)
+
+    elif file.filename.endswith(".json"):
+        file_format = "json"
+        rows = json.loads(content)
+
+    else:
+        raise HTTPException(400, "Only CSV or JSON allowed")
+
+    record_count = len(rows)
+    fields = list(rows[0].keys()) if rows else []
+    sample_records = rows[:5]
+
+    # Upload file to Firebase Storage
+    blob = bucket.blob(f"datasets/{file.filename}")
+    blob.upload_from_string(content)
+
+    file_url = blob.public_url
+
+    # Save metadata in Firestore
+    doc = db.collection("datasets").document()
+
+    dataset_data = {
+        "id": doc.id,
+        "owner_id": user_id,
+        "title": title,
+        "description": description,
+        "category": category,
+        "original_filename": file.filename,
+        "file_format": file_format,
+        "record_count": record_count,
+        "fields": fields,
+        "sample_records": sample_records,
+        "file_url": file_url,
+        "created_at": datetime.now(timezone.utc)
+    }
+
+    doc.set(dataset_data)
+
+    # Reward tokens to user
+    reward = record_count * 0.5
+
+    db.collection("users").document(user_id).update({
+        "token_balance": reward
+    })
+
+    dataset_data["token_reward"] = reward
+
+    return dataset_data
 
 
-@router.post("/manual", response_model=DatasetResponse, status_code=201)
-async def manual_upload(
-    body: ManualUploadRequest,
-    user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    try:
-        ds = await process_manual_input(
-            db, user.id, body.title, body.description, body.category, body.records
-        )
-    except ValueError as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc))
-    return ds
+# -------------------------------------------------
+# MY DATASETS
+# -------------------------------------------------
+@router.get("/mine")
+async def my_datasets(user_id: str = Depends(get_current_user_id)):
+
+    docs = db.collection("datasets").where("owner_id", "==", user_id).stream()
+
+    datasets = []
+
+    for d in docs:
+        datasets.append(d.to_dict())
+
+    return datasets
 
 
-@router.get("/mine", response_model=list[DatasetResponse])
-async def my_datasets(
-    user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    result = await db.execute(
-        select(Dataset).where(Dataset.owner_id == user.id).order_by(Dataset.created_at.desc())
-    )
-    return result.scalars().all()
+# -------------------------------------------------
+# DATASET STATS
+# -------------------------------------------------
+@router.get("/stats")
+async def dataset_stats(user_id: str = Depends(get_current_user_id)):
 
+    docs = db.collection("datasets").where("owner_id", "==", user_id).stream()
 
-@router.get("/stats", response_model=DatasetStatsResponse)
-async def my_stats(
-    user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    return await get_dataset_stats(db, user.id)
+    total_datasets = 0
+    total_records = 0
 
+    for d in docs:
+        data = d.to_dict()
+        total_datasets += 1
+        total_records += data.get("record_count", 0)
 
-@router.get("/{dataset_id}", response_model=DatasetResponse)
-async def get_dataset(
-    dataset_id: str,
-    db: AsyncSession = Depends(get_db),
-):
-    ds = await db.get(Dataset, dataset_id)
-    if not ds:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Dataset not found")
-    return ds
-
-
-@router.get("/{dataset_id}/preview")
-async def preview_dataset(
-    dataset_id: str,
-    db: AsyncSession = Depends(get_db),
-):
-    ds = await db.get(Dataset, dataset_id)
-    if not ds:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Dataset not found")
     return {
-        "id": ds.id,
-        "title": ds.title,
-        "fields": json.loads(ds.fields),
-        "sample_records": json.loads(ds.sample_data),
-        "record_count": ds.record_count,
+        "datasets_uploaded": total_datasets,
+        "total_records": total_records
     }
 
 
+# -------------------------------------------------
+# GET DATASET
+# -------------------------------------------------
+@router.get("/{dataset_id}")
+async def get_dataset(dataset_id: str):
+
+    doc = db.collection("datasets").document(dataset_id).get()
+
+    if not doc.exists:
+        raise HTTPException(404, "Dataset not found")
+
+    return doc.to_dict()
+
+
+# -------------------------------------------------
+# DATASET PREVIEW
+# -------------------------------------------------
+@router.get("/{dataset_id}/preview")
+async def preview_dataset(dataset_id: str):
+
+    doc = db.collection("datasets").document(dataset_id).get()
+
+    if not doc.exists:
+        raise HTTPException(404, "Dataset not found")
+
+    data = doc.to_dict()
+
+    return {
+        "id": data["id"],
+        "title": data["title"],
+        "fields": data["fields"],
+        "sample_records": data["sample_records"],
+        "record_count": data["record_count"]
+    }
+
+
+# -------------------------------------------------
+# DOWNLOAD DATASET
+# -------------------------------------------------
 @router.get("/{dataset_id}/download")
-async def download_dataset(
-    dataset_id: str,
-    user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    ds = await db.get(Dataset, dataset_id)
-    if not ds:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Dataset not found")
-    path = Path(ds.file_path)
-    if not path.exists():
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "File missing from storage")
-    media = "text/csv" if ds.file_format == "csv" else "application/json"
-    return FileResponse(path, media_type=media, filename=ds.original_filename)
+async def download_dataset(dataset_id: str):
+
+    doc = db.collection("datasets").document(dataset_id).get()
+
+    if not doc.exists:
+        raise HTTPException(404, "Dataset not found")
+
+    data = doc.to_dict()
+
+    return JSONResponse({
+        "download_url": data["file_url"]
+    })
