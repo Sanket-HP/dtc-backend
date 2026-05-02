@@ -3,3 +3,5 @@ __pycache__/
 *.pyc
 .env
 dtc.db
+firebase_key.json
+backend/firebase_key.json
