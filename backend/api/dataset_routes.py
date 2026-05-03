@@ -81,6 +81,45 @@ def parse_file(content: bytes, filename: str):
 
 
 # -------------------------------------------------
+# QUALITY SCORE
+# -------------------------------------------------
+def compute_quality_score(rows):
+
+    record_count = len(rows)
+
+    if record_count == 0:
+        return 0
+
+    # uniqueness
+    unique_rows = len(set(json.dumps(r, sort_keys=True) for r in rows))
+    uniqueness_ratio = unique_rows / record_count
+
+    # completeness
+    total_fields = 0
+    filled_fields = 0
+
+    for row in rows:
+        for v in row.values():
+            total_fields += 1
+            if v not in ("", None):
+                filled_fields += 1
+
+    completeness_ratio = filled_fields / total_fields if total_fields else 0
+
+    # column consistency
+    column_counts = [len(r.keys()) for r in rows]
+    consistency_ratio = min(column_counts) / max(column_counts)
+
+    quality_score = (
+        uniqueness_ratio * 0.4 +
+        completeness_ratio * 0.4 +
+        consistency_ratio * 0.2
+    )
+
+    return round(quality_score, 2)
+
+
+# -------------------------------------------------
 # UPLOAD DATASET
 # -------------------------------------------------
 @router.post("/upload")
@@ -94,7 +133,7 @@ async def upload_dataset(
 
     content = await file.read()
 
-    # 🚨 File size protection (20MB)
+    # file size protection
     if len(content) > 20 * 1024 * 1024:
         raise HTTPException(400, "File too large. Maximum 20MB allowed.")
 
@@ -125,9 +164,8 @@ async def upload_dataset(
 
     ai_score = compute_ai_score(rows)
 
-    quality_score = 1 - (
-        len(set(json.dumps(r, sort_keys=True) for r in rows)) / record_count
-    )
+    # FIXED QUALITY CALCULATION
+    quality_score = compute_quality_score(rows)
 
     dataset_value = compute_dataset_value(
         record_count,
@@ -162,7 +200,7 @@ async def upload_dataset(
 
         "record_count": record_count,
 
-        "quality_score": round(quality_score, 2),
+        "quality_score": quality_score,
         "ai_training_score": round(ai_score, 2),
 
         "dataset_value": dataset_value,
@@ -250,11 +288,9 @@ async def delete_dataset(
 
     token_reward = dataset.get("token_reward", 0)
 
-    # prevent deleting purchased datasets
     if dataset.get("downloads", 0) > 0:
         raise HTTPException(400, "Cannot delete dataset that has downloads")
 
-    # remove tokens
     db.collection("users").document(user_id).update({
         "token_balance": firestore.Increment(-token_reward),
         "tokens_earned": firestore.Increment(-token_reward),
@@ -269,7 +305,6 @@ async def delete_dataset(
         "created_at": datetime.now(timezone.utc)
     })
 
-    # delete storage file safely
     file_url = dataset.get("file_url")
 
     if file_url:

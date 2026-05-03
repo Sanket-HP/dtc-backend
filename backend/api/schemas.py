@@ -13,30 +13,53 @@ from pydantic import BaseModel, EmailStr, Field
 # ─────────────────────────────────────────────
 
 class RegisterRequest(BaseModel):
+
     username: str = Field(..., min_length=3, max_length=80)
+
     email: EmailStr
+
     password: str = Field(..., min_length=6)
+
     full_name: str = ""
+
     is_company: bool = False
+
+    # NEW: referral support
+    referral_code: Optional[str] = None
 
 
 class LoginRequest(BaseModel):
+
     email: EmailStr
+
     password: str
 
 
 class TokenResponse(BaseModel):
+
     access_token: str
+
     token_type: str = "bearer"
 
 
 class UserResponse(BaseModel):
+
     id: str
+
     username: str
+
     email: str
+
     full_name: str
+
     is_company: bool
-    token_balance: float
+
+    token_balance: float = 0
+
+    # NEW dashboard stats
+    tokens_earned: Optional[float] = 0
+    datasets_uploaded: Optional[int] = 0
+
     created_at: datetime
 
     class Config:
@@ -50,24 +73,30 @@ class UserResponse(BaseModel):
 class DatasetResponse(BaseModel):
 
     id: str
+
     owner_id: str
 
     title: str
+
     description: str
+
     category: str
 
     record_count: int
 
-    schema: List[str]
+    schema: Optional[List[str]] = []
 
     quality_score: float
+
     trust_score: float
 
-    rating: float
-    rating_count: int
+    rating: float = 0
 
-    download_count: int
-    purchase_count: int
+    rating_count: int = 0
+
+    downloads: int = 0
+
+    purchase_count: Optional[int] = 0
 
     file_url: str
 
