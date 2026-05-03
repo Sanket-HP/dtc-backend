@@ -11,33 +11,51 @@ router = APIRouter(prefix="/leaderboard", tags=["leaderboard"])
 # TOP CONTRIBUTORS (BY TOKEN BALANCE)
 # -------------------------------------------------
 @router.get("/contributors")
-async def top_contributors(limit: int = Query(10, ge=1, le=50)):
+async def top_contributors(limit: int = 10):
 
-    docs = db.collection("users").stream()
+    users = db.collection("users").stream()
 
-    users = []
+    leaderboard = []
 
-    for d in docs:
+    for user_doc in users:
 
-        data = d.to_dict() or {}
+        user = user_doc.to_dict() or {}
 
-        # ignore deleted users
-        if data.get("status") == "deleted":
+        if user.get("status") == "deleted":
             continue
 
-        users.append({
-            "user_id": d.id,
-            "username": data.get("username", "anonymous"),
-            "full_name": data.get("full_name"),
-            "token_balance": float(data.get("token_balance", 0)),
-            "datasets_uploaded": data.get("datasets_uploaded", 0),
-            "tokens_earned": data.get("tokens_earned", 0)
+        user_id = user_doc.id
+
+        # count datasets + token rewards
+        datasets = (
+            db.collection("datasets")
+            .where("owner_id", "==", user_id)
+            .stream()
+        )
+
+        dataset_count = 0
+        total_tokens = 0
+
+        for d in datasets:
+
+            data = d.to_dict() or {}
+
+            dataset_count += 1
+            total_tokens += data.get("token_reward", 0)
+
+        leaderboard.append({
+            "user_id": user_id,
+            "username": user.get("username", "anonymous"),
+            "datasets_uploaded": dataset_count,
+            "token_balance": round(total_tokens, 2)
         })
 
-    users.sort(key=lambda x: x["token_balance"], reverse=True)
+    leaderboard.sort(
+        key=lambda x: x["token_balance"],
+        reverse=True
+    )
 
-    return users[:limit]
-
+    return leaderboard[:limit]
 
 # -------------------------------------------------
 # TOP DATASET CREATORS
