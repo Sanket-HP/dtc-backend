@@ -23,7 +23,7 @@ async def top_contributors():
 
     for d in docs:
 
-        data = d.to_dict()
+        data = d.to_dict() or {}
 
         results.append({
             "user_id": d.id,
@@ -48,14 +48,14 @@ async def top_dataset_creators():
 
     for d in docs:
 
-        data = d.to_dict()
+        data = d.to_dict() or {}
 
         owner = data.get("owner_id")
 
-        if owner not in creator_counts:
-            creator_counts[owner] = 0
+        if not owner:
+            continue
 
-        creator_counts[owner] += 1
+        creator_counts[owner] = creator_counts.get(owner, 0) + 1
 
     sorted_creators = sorted(
         creator_counts.items(),
@@ -71,7 +71,7 @@ async def top_dataset_creators():
 
         if user_doc.exists:
 
-            user = user_doc.to_dict()
+            user = user_doc.to_dict() or {}
 
             results.append({
                 "user_id": user_id,
@@ -100,7 +100,7 @@ async def top_datasets():
 
     for d in docs:
 
-        data = d.to_dict()
+        data = d.to_dict() or {}
 
         results.append({
             "dataset_id": d.id,
@@ -131,7 +131,7 @@ async def most_downloaded_datasets():
 
     for d in docs:
 
-        data = d.to_dict()
+        data = d.to_dict() or {}
 
         results.append({
             "dataset_id": d.id,
@@ -161,7 +161,7 @@ async def highest_rated_datasets():
 
     for d in docs:
 
-        data = d.to_dict()
+        data = d.to_dict() or {}
 
         results.append({
             "dataset_id": d.id,
@@ -191,7 +191,7 @@ async def top_ai_datasets():
 
     for d in docs:
 
-        data = d.to_dict()
+        data = d.to_dict() or {}
 
         results.append({
             "dataset_id": d.id,
@@ -221,7 +221,7 @@ async def highest_value_datasets():
 
     for d in docs:
 
-        data = d.to_dict()
+        data = d.to_dict() or {}
 
         results.append({
             "dataset_id": d.id,

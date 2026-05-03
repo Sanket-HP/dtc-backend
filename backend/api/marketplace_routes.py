@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from google.cloud import firestore
 
 from ..firebase_config import db
 from .deps import get_current_user
@@ -21,7 +22,7 @@ async def list_marketplace(
     category: str | None = Query(None),
     min_quality: float | None = Query(None),
     min_trust: float | None = Query(None),
-    limit: int = Query(50),
+    limit: int = Query(50, ge=1, le=100),
 ):
 
     docs = db.collection("datasets").limit(500).stream()
@@ -114,7 +115,6 @@ async def list_categories():
     for doc in docs:
 
         data = doc.to_dict()
-
         category = data.get("category", "general")
 
         category_count[category] = category_count.get(category, 0) + 1
@@ -168,7 +168,7 @@ async def purchase_dataset(
 
     dataset = dataset_doc.to_dict()
 
-    if dataset["owner_id"] == user["id"]:
+    if dataset.get("owner_id") == user.get("id"):
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
             "Cannot purchase your own dataset"
@@ -197,7 +197,8 @@ async def purchase_dataset(
 
     buyer = buyer_doc.to_dict()
 
-    price = dataset.get("dataset_value", 10)
+    # Convert dataset_value score to price
+    price = max(round(dataset.get("dataset_value", 0.1) * 100, 2), 5)
 
     if buyer.get("token_balance", 0) < price:
         raise HTTPException(
@@ -205,24 +206,19 @@ async def purchase_dataset(
             "Insufficient token balance"
         )
 
-    # Deduct buyer tokens
+    # Atomic token deduction
     buyer_ref.update({
-        "token_balance": buyer["token_balance"] - price
+        "token_balance": firestore.Increment(-price)
     })
 
-    # Add tokens to dataset owner
+    # Atomic owner reward
     owner_ref = db.collection("users").document(dataset["owner_id"])
-    owner_doc = owner_ref.get()
 
-    if owner_doc.exists:
+    owner_ref.update({
+        "token_balance": firestore.Increment(price)
+    })
 
-        owner = owner_doc.to_dict()
-
-        owner_ref.update({
-            "token_balance": owner.get("token_balance", 0) + price
-        })
-
-    # Increase dataset counters
+    # Update dataset stats
     dataset_ref.update({
         "download_count": dataset.get("download_count", 0) + 1,
         "purchase_count": dataset.get("purchase_count", 0) + 1
@@ -270,7 +266,6 @@ async def aggregate_datasets(
     for doc in docs:
 
         data = doc.to_dict()
-
         sample = data.get("sample_records", [])
 
         for row in sample:

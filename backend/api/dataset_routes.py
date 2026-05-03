@@ -13,6 +13,7 @@ from collections import Counter
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from google.cloud import firestore
 
 from ..firebase_config import db, bucket
 from .deps import get_current_user_id
@@ -26,7 +27,7 @@ router = APIRouter(prefix="/datasets", tags=["datasets"])
 
 
 # -------------------------------------------------
-# DATASET HASH GENERATION (GLOBAL DUPLICATE DETECTION)
+# DATASET HASH GENERATION
 # -------------------------------------------------
 def generate_dataset_hash(rows):
 
@@ -39,8 +40,7 @@ def generate_dataset_hash(rows):
 
 
 # -------------------------------------------------
-# PARTIAL SIMILARITY DETECTION
-# prevents users uploading slightly modified datasets
+# DATASET SIMILARITY
 # -------------------------------------------------
 def dataset_similarity(rows1, rows2):
 
@@ -165,6 +165,9 @@ async def upload_dataset(
     if len(rows) < 20:
         raise HTTPException(400, "Dataset too small (minimum 20 rows)")
 
+    if len(rows) > 500000:
+        raise HTTPException(400, "Dataset too large (max 500k rows)")
+
     rows = anonymize_dataset(rows)
 
     # Spam detection
@@ -200,7 +203,6 @@ async def upload_dataset(
     for d in docs:
 
         data = d.to_dict()
-
         sample = data.get("sample_records")
 
         if sample:
@@ -253,6 +255,7 @@ async def upload_dataset(
         "quality_score": quality_score,
         "ai_training_score": ai_score,
         "dataset_value": dataset_value,
+        "token_reward": reward,
         "trust_score": round((quality_score + ai_score) / 2, 2),
         "rating": 0,
         "rating_count": 0,
@@ -267,18 +270,12 @@ async def upload_dataset(
     db.collection("datasets").document(dataset_id).set(dataset_data)
 
     # -------------------------------------------------
-    # UPDATE USER WALLET
+    # UPDATE USER WALLET (ATOMIC)
     # -------------------------------------------------
     user_ref = db.collection("users").document(user_id)
-    user_doc = user_ref.get()
-
-    balance = 0
-
-    if user_doc.exists:
-        balance = user_doc.to_dict().get("token_balance", 0)
 
     user_ref.update({
-        "token_balance": balance + reward
+        "token_balance": firestore.Increment(reward)
     })
 
     db.collection("transactions").add({
@@ -288,7 +285,5 @@ async def upload_dataset(
         "type": "dataset_reward",
         "created_at": datetime.now(timezone.utc)
     })
-
-    dataset_data["token_reward"] = reward
 
     return dataset_data

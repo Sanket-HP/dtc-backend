@@ -1,6 +1,6 @@
 """User profile, wallet, reputation and analytics routes."""
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from datetime import datetime, timezone
 
 from ..firebase_config import db
@@ -32,37 +32,58 @@ async def get_my_profile(user_id: str = Depends(get_current_user_id)):
 @router.get("/wallet")
 async def get_wallet(user_id: str = Depends(get_current_user_id)):
 
-    doc = db.collection("users").document(user_id).get()
+    user_doc = db.collection("users").document(user_id).get()
 
-    if not doc.exists:
+    if not user_doc.exists:
         raise HTTPException(404, "User not found")
 
-    user = doc.to_dict()
+    user = user_doc.to_dict()
+
+    transactions = (
+        db.collection("transactions")
+        .where("user_id", "==", user_id)
+        .stream()
+    )
+
+    total_earned = 0
+
+    for t in transactions:
+        data = t.to_dict()
+        if data.get("type") == "dataset_reward":
+            total_earned += data.get("amount", 0)
 
     return {
         "user_id": user_id,
         "token_balance": user.get("token_balance", 0),
+        "total_earned": round(total_earned, 2),
         "updated_at": user.get("updated_at", datetime.now(timezone.utc))
     }
 
 
 # -------------------------------------------------
-# USER DATASETS
+# USER DATASETS (PAGINATED)
 # -------------------------------------------------
 @router.get("/datasets")
-async def get_user_datasets(user_id: str = Depends(get_current_user_id)):
+async def get_user_datasets(
+    limit: int = Query(20, ge=1, le=100),
+    user_id: str = Depends(get_current_user_id)
+):
 
     docs = (
         db.collection("datasets")
         .where("owner_id", "==", user_id)
+        .order_by("created_at", direction="DESCENDING")
+        .limit(limit)
         .stream()
     )
 
     datasets = []
 
     for d in docs:
+
         data = d.to_dict()
         data["id"] = d.id
+
         datasets.append(data)
 
     return datasets
@@ -85,8 +106,10 @@ async def get_transactions(user_id: str = Depends(get_current_user_id)):
     transactions = []
 
     for d in docs:
+
         data = d.to_dict()
         data["id"] = d.id
+
         transactions.append(data)
 
     return transactions
@@ -98,7 +121,7 @@ async def get_transactions(user_id: str = Depends(get_current_user_id)):
 @router.get("/reputation")
 async def get_reputation(user_id: str = Depends(get_current_user_id)):
 
-    datasets = (
+    docs = (
         db.collection("datasets")
         .where("owner_id", "==", user_id)
         .stream()
@@ -109,7 +132,7 @@ async def get_reputation(user_id: str = Depends(get_current_user_id)):
     dataset_count = 0
     downloads = 0
 
-    for d in datasets:
+    for d in docs:
 
         data = d.to_dict()
 
@@ -132,7 +155,7 @@ async def get_reputation(user_id: str = Depends(get_current_user_id)):
             2
         )
 
-    # Contributor badge system
+    # Badge system
     badge = "Beginner"
 
     if reputation > 90:
@@ -162,7 +185,7 @@ async def get_reputation(user_id: str = Depends(get_current_user_id)):
 @router.get("/analytics")
 async def user_analytics(user_id: str = Depends(get_current_user_id)):
 
-    datasets = (
+    docs = (
         db.collection("datasets")
         .where("owner_id", "==", user_id)
         .stream()
@@ -173,7 +196,7 @@ async def user_analytics(user_id: str = Depends(get_current_user_id)):
     total_downloads = 0
     total_value = 0
 
-    for d in datasets:
+    for d in docs:
 
         data = d.to_dict()
 
