@@ -32,6 +32,36 @@ async def get_my_profile(user_id: str = Depends(get_current_user_id)):
 
 
 # -------------------------------------------------
+# REFERRAL STATS (NEW)
+# -------------------------------------------------
+@router.get("/referral-stats")
+async def referral_stats(user_id: str = Depends(get_current_user_id)):
+
+    user_doc = db.collection("users").document(user_id).get()
+
+    if not user_doc.exists:
+        raise HTTPException(404, "User not found")
+
+    user = user_doc.to_dict() or {}
+
+    referral_code = user.get("referral_code")
+
+    invited = (
+        db.collection("users")
+        .where("referred_by", "==", referral_code)
+        .stream()
+    )
+
+    invited_count = len(list(invited))
+
+    return {
+        "referral_code": referral_code,
+        "invited_users": invited_count,
+        "referral_earnings": user.get("referral_earnings", 0)
+    }
+
+
+# -------------------------------------------------
 # USER WALLET BALANCE
 # -------------------------------------------------
 @router.get("/wallet")
@@ -112,6 +142,9 @@ async def get_user_datasets(
 
             "downloads": data.get("downloads", 0),
             "rating": data.get("rating", 0),
+
+            # NEW
+            "dataset_hash": data.get("dataset_hash"),
 
             "created_at": data.get("created_at")
         })

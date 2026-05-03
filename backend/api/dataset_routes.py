@@ -6,10 +6,8 @@ import csv
 import io
 import json
 import uuid
-import re
 import math
 import hashlib
-from collections import Counter
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -93,13 +91,31 @@ async def upload_dataset(
 
     dataset_hash = generate_dataset_hash(rows)
 
+    # -------------------------------------------------
+    # DUPLICATE DATASET CHECK
+    # -------------------------------------------------
+    existing = (
+        db.collection("datasets")
+        .where("dataset_hash", "==", dataset_hash)
+        .limit(1)
+        .stream()
+    )
+
+    for _ in existing:
+        raise HTTPException(
+            400,
+            "Duplicate dataset detected. This dataset already exists."
+        )
+
     record_count = len(rows)
 
     # AI scoring
     ai_score = compute_ai_score(rows)
 
-    # quality
-    quality_score = 1 - (len(set(json.dumps(r, sort_keys=True) for r in rows)) / record_count)
+    # quality score
+    quality_score = 1 - (
+        len(set(json.dumps(r, sort_keys=True) for r in rows)) / record_count
+    )
 
     # dataset value
     dataset_value = compute_dataset_value(
@@ -114,12 +130,12 @@ async def upload_dataset(
     # token reward
     token_reward = compute_token_reward(record_count, dataset_value)
 
-    # PRICE FIX
+    # dataset price
     price = calculate_dataset_price(dataset_value, record_count)
 
     dataset_id = str(uuid.uuid4())
 
-    # upload file to firebase
+    # upload to Firebase storage
     blob = bucket.blob(f"datasets/{dataset_id}/{file.filename}")
     blob.upload_from_string(content)
 
@@ -158,7 +174,9 @@ async def upload_dataset(
 
     db.collection("datasets").document(dataset_id).set(dataset_data)
 
-    # reward tokens
+    # -------------------------------------------------
+    # REWARD USER FOR DATASET
+    # -------------------------------------------------
     db.collection("users").document(user_id).update({
         "token_balance": firestore.Increment(token_reward),
         "tokens_earned": firestore.Increment(token_reward),
@@ -172,6 +190,39 @@ async def upload_dataset(
         "type": "dataset_upload_reward",
         "created_at": datetime.now(timezone.utc)
     })
+
+    # -------------------------------------------------
+    # REFERRAL REWARD
+    # -------------------------------------------------
+    user_doc = db.collection("users").document(user_id).get()
+
+    if user_doc.exists:
+
+        user_data = user_doc.to_dict()
+        referred_by = user_data.get("referred_by")
+
+        if referred_by:
+
+            ref_query = (
+                db.collection("users")
+                .where("referral_code", "==", referred_by)
+                .limit(1)
+                .stream()
+            )
+
+            for ref in ref_query:
+
+                ref.reference.update({
+                    "token_balance": firestore.Increment(2),
+                    "referral_earnings": firestore.Increment(2)
+                })
+
+                db.collection("transactions").add({
+                    "user_id": ref.id,
+                    "amount": 2,
+                    "type": "referral_upload_reward",
+                    "created_at": datetime.now(timezone.utc)
+                })
 
     return {
         "message": "Dataset uploaded successfully",

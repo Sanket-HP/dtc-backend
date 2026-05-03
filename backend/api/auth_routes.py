@@ -8,6 +8,7 @@ import os
 from fastapi import APIRouter, HTTPException, status, Depends
 
 from firebase_admin import auth
+from google.cloud import firestore
 from ..firebase_config import db
 
 from .schemas import RegisterRequest, LoginRequest, TokenResponse, UserResponse
@@ -16,7 +17,6 @@ from .deps import get_current_user_id
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-# Firebase Web API key
 FIREBASE_API_KEY = os.getenv("FIREBASE_API_KEY")
 
 
@@ -27,23 +27,84 @@ FIREBASE_API_KEY = os.getenv("FIREBASE_API_KEY")
 async def register(body: RegisterRequest):
 
     try:
+
+        # -------------------------------------------------
+        # CREATE FIREBASE AUTH USER
+        # -------------------------------------------------
         user_record = auth.create_user(
             email=body.email,
             password=body.password,
             display_name=body.username
         )
 
+        # -------------------------------------------------
+        # REFERRAL VALIDATION
+        # -------------------------------------------------
+        referral_from = None
+
+        if body.referral_code and body.referral_code != body.username:
+
+            ref_query = (
+                db.collection("users")
+                .where("referral_code", "==", body.referral_code)
+                .limit(1)
+                .stream()
+            )
+
+            for ref in ref_query:
+                referral_from = body.referral_code
+
+        # -------------------------------------------------
+        # CREATE USER DOCUMENT
+        # -------------------------------------------------
         user_data = {
             "username": body.username,
             "email": body.email,
             "full_name": body.full_name,
             "is_company": body.is_company,
+
             "token_balance": 0,
-            "status": "active",  # NEW
-            "created_at": datetime.now(timezone.utc)
+            "status": "active",
+
+            "created_at": datetime.now(timezone.utc),
+
+            # referral system
+            "referral_code": body.username.lower(),
+            "referred_by": referral_from,
+            "referral_earnings": 0,
+
+            # stats
+            "datasets_uploaded": 0,
+            "tokens_earned": 0
         }
 
         db.collection("users").document(user_record.uid).set(user_data)
+
+        # -------------------------------------------------
+        # SIGNUP REFERRAL REWARD
+        # -------------------------------------------------
+        if referral_from:
+
+            ref_query = (
+                db.collection("users")
+                .where("referral_code", "==", referral_from)
+                .limit(1)
+                .stream()
+            )
+
+            for ref in ref_query:
+
+                ref.reference.update({
+                    "token_balance": firestore.Increment(1),
+                    "referral_earnings": firestore.Increment(1)
+                })
+
+                db.collection("transactions").add({
+                    "user_id": ref.id,
+                    "amount": 1,
+                    "type": "referral_signup_reward",
+                    "created_at": datetime.now(timezone.utc)
+                })
 
         user_data["id"] = user_record.uid
 
@@ -112,7 +173,6 @@ async def get_current_user(
 
     data = doc.to_dict()
 
-    # prevent deleted users login
     if data.get("status") == "deleted":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -125,7 +185,7 @@ async def get_current_user(
 
 
 # -------------------------------------------------
-# DELETE ACCOUNT (NEW)
+# DELETE ACCOUNT
 # -------------------------------------------------
 @router.delete("/delete-account")
 async def delete_account(
@@ -134,7 +194,6 @@ async def delete_account(
 
     try:
 
-        # delete user datasets
         datasets = (
             db.collection("datasets")
             .where("owner_id", "==", user_id)
@@ -144,7 +203,6 @@ async def delete_account(
         for d in datasets:
             db.collection("datasets").document(d.id).delete()
 
-        # delete transactions
         txs = (
             db.collection("transactions")
             .where("user_id", "==", user_id)
@@ -154,13 +212,11 @@ async def delete_account(
         for t in txs:
             db.collection("transactions").document(t.id).delete()
 
-        # mark user as deleted (better than full deletion)
         db.collection("users").document(user_id).update({
             "status": "deleted",
             "deleted_at": datetime.now(timezone.utc)
         })
 
-        # remove firebase auth user
         auth.delete_user(user_id)
 
         return {"message": "Account deleted successfully"}
@@ -179,6 +235,7 @@ async def delete_account(
 async def forgot_password(email: str):
 
     try:
+
         user = auth.get_user_by_email(email)
 
         reset_token = secrets.token_urlsafe(32)

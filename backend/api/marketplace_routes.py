@@ -41,8 +41,10 @@ async def list_marketplace(
 
         datasets.append(data)
 
+    # Sort by trust score first
     datasets.sort(
         key=lambda x: (
+            x.get("trust_score", 0),
             x.get("downloads", 0),
             x.get("quality_score", 0)
         ),
@@ -148,6 +150,45 @@ async def preview_dataset(dataset_id: str):
 
 
 # -------------------------------------------------
+# DOWNLOAD DATASET (NEW)
+# -------------------------------------------------
+@router.get("/datasets/{dataset_id}/download")
+async def download_dataset(
+    dataset_id: str,
+    user: dict = Depends(get_current_user)
+):
+
+    dataset_doc = db.collection("datasets").document(dataset_id).get()
+
+    if not dataset_doc.exists:
+        raise HTTPException(404, "Dataset not found")
+
+    dataset = dataset_doc.to_dict()
+
+    # Owner can download their own dataset
+    if dataset.get("owner_id") == user.get("id"):
+        return {"download_url": dataset.get("file_url")}
+
+    purchase = (
+        db.collection("purchases")
+        .where("buyer_id", "==", user["id"])
+        .where("dataset_id", "==", dataset_id)
+        .limit(1)
+        .stream()
+    )
+
+    if not list(purchase):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Dataset not purchased"
+        )
+
+    return {
+        "download_url": dataset.get("file_url")
+    }
+
+
+# -------------------------------------------------
 # PURCHASE DATASET
 # -------------------------------------------------
 @router.post("/purchase", status_code=201)
@@ -170,7 +211,6 @@ async def purchase_dataset(
             "Cannot purchase your own dataset"
         )
 
-    # Prevent duplicate purchase
     existing_purchase = (
         db.collection("purchases")
         .where("buyer_id", "==", user["id"])
@@ -201,24 +241,19 @@ async def purchase_dataset(
             "Insufficient token balance"
         )
 
-    # Royalty split
     owner_share = round(price * 0.8, 2)
-    platform_fee = round(price * 0.2, 2)
 
     owner_ref = db.collection("users").document(dataset["owner_id"])
 
-    # Deduct buyer tokens
     buyer_ref.update({
         "token_balance": firestore.Increment(-price)
     })
 
-    # Reward owner
     owner_ref.update({
         "token_balance": firestore.Increment(owner_share),
         "tokens_earned": firestore.Increment(owner_share)
     })
 
-    # Update dataset stats
     dataset_ref.update({
         "downloads": firestore.Increment(1)
     })
@@ -236,7 +271,6 @@ async def purchase_dataset(
 
     purchase_ref.set(purchase_data)
 
-    # Buyer transaction
     db.collection("transactions").add({
         "user_id": user["id"],
         "dataset_id": body.dataset_id,
@@ -245,7 +279,6 @@ async def purchase_dataset(
         "created_at": datetime.now(timezone.utc)
     })
 
-    # Seller transaction
     db.collection("transactions").add({
         "user_id": dataset["owner_id"],
         "dataset_id": body.dataset_id,
