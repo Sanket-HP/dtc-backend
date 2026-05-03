@@ -41,10 +41,23 @@ def generate_dataset_hash(rows):
 # -------------------------------------------------
 def calculate_dataset_price(dataset_value, records):
 
-    base_price = dataset_value * 5
-    size_bonus = math.log(records + 1)
+    base_price = dataset_value * 10
+    size_bonus = math.sqrt(records / 100)
 
-    return round(base_price * size_bonus, 2)
+    return round(base_price + size_bonus, 2)
+
+
+# -------------------------------------------------
+# TRUST SCORE
+# -------------------------------------------------
+def calculate_trust_score(quality_score, ai_score, dataset_value):
+
+    return round(
+        (quality_score * 0.4) +
+        (ai_score * 0.4) +
+        (dataset_value * 0.2),
+        2
+    )
 
 
 # -------------------------------------------------
@@ -133,6 +146,9 @@ async def upload_dataset(
     # dataset price
     price = calculate_dataset_price(dataset_value, record_count)
 
+    # trust score
+    trust_score = calculate_trust_score(quality_score, ai_score, dataset_value)
+
     dataset_id = str(uuid.uuid4())
 
     # upload to Firebase storage
@@ -160,12 +176,15 @@ async def upload_dataset(
         "token_reward": token_reward,
 
         "price": price,
+        "trust_score": trust_score,
 
         "downloads": 0,
         "rating": 0,
         "rating_count": 0,
 
         "dataset_hash": dataset_hash,
+
+        "sample_records": rows[:5],
 
         "file_url": file_url,
 
@@ -228,7 +247,8 @@ async def upload_dataset(
         "message": "Dataset uploaded successfully",
         "dataset_id": dataset_id,
         "token_reward": token_reward,
-        "price": price
+        "price": price,
+        "trust_score": trust_score
     }
 
 
