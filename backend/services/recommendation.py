@@ -15,11 +15,36 @@ def format_dataset(doc):
         "id": doc.id,
         "title": data.get("title"),
         "category": data.get("category"),
+        "record_count": data.get("record_count", 0),
         "quality_score": data.get("quality_score", 0),
         "trust_score": data.get("trust_score", 0),
+        "ai_training_score": data.get("ai_training_score", 0),
+        "dataset_value": data.get("dataset_value", 0),
         "downloads": data.get("download_count", 0),
         "rating": data.get("rating", 0)
     }
+
+
+# -------------------------------------------------
+# RANK DATASETS
+# -------------------------------------------------
+def ranking_score(data):
+
+    quality = data.get("quality_score", 0)
+    trust = data.get("trust_score", 0)
+    ai_score = data.get("ai_training_score", 0)
+    downloads = data.get("download_count", 0)
+    value = data.get("dataset_value", 0)
+
+    score = (
+        (quality * 2) +
+        (trust * 2) +
+        (ai_score * 2) +
+        (downloads * 0.02) +
+        (value * 1.5)
+    )
+
+    return score
 
 
 # -------------------------------------------------
@@ -27,14 +52,21 @@ def format_dataset(doc):
 # -------------------------------------------------
 def trending_datasets(limit: int = 10):
 
-    docs = (
-        db.collection("datasets")
-        .order_by("download_count", direction="DESCENDING")
-        .limit(limit)
-        .stream()
-    )
+    docs = db.collection("datasets").limit(200).stream()
 
-    return [format_dataset(d) for d in docs]
+    datasets = []
+
+    for d in docs:
+
+        data = d.to_dict()
+
+        score = ranking_score(data)
+
+        datasets.append((score, format_dataset(d)))
+
+    datasets.sort(key=lambda x: x[0], reverse=True)
+
+    return [d[1] for d in datasets[:limit]]
 
 
 # -------------------------------------------------
@@ -75,12 +107,23 @@ def recommend_by_category(category: str, limit: int = 10):
     docs = (
         db.collection("datasets")
         .where("category", "==", category)
-        .order_by("trust_score", direction="DESCENDING")
-        .limit(limit)
+        .limit(200)
         .stream()
     )
 
-    return [format_dataset(d) for d in docs]
+    ranked = []
+
+    for d in docs:
+
+        data = d.to_dict()
+
+        score = ranking_score(data)
+
+        ranked.append((score, format_dataset(d)))
+
+    ranked.sort(key=lambda x: x[0], reverse=True)
+
+    return [r[1] for r in ranked[:limit]]
 
 
 # -------------------------------------------------
@@ -100,20 +143,26 @@ def similar_datasets(dataset_id: str, limit: int = 5):
     docs = (
         db.collection("datasets")
         .where("category", "==", category)
-        .limit(limit + 1)
+        .limit(200)
         .stream()
     )
 
-    results = []
+    ranked = []
 
     for d in docs:
 
         if d.id == dataset_id:
             continue
 
-        results.append(format_dataset(d))
+        data = d.to_dict()
 
-    return results[:limit]
+        score = ranking_score(data)
+
+        ranked.append((score, format_dataset(d)))
+
+    ranked.sort(key=lambda x: x[0], reverse=True)
+
+    return [r[1] for r in ranked[:limit]]
 
 
 # -------------------------------------------------
@@ -153,18 +202,24 @@ def enterprise_recommendations(category: str | None = None, limit: int = 20):
         docs = (
             db.collection("datasets")
             .where("category", "==", category)
-            .order_by("trust_score", direction="DESCENDING")
-            .limit(limit)
+            .limit(300)
             .stream()
         )
 
     else:
 
-        docs = (
-            db.collection("datasets")
-            .order_by("trust_score", direction="DESCENDING")
-            .limit(limit)
-            .stream()
-        )
+        docs = db.collection("datasets").limit(300).stream()
 
-    return [format_dataset(d) for d in docs]
+    ranked = []
+
+    for d in docs:
+
+        data = d.to_dict()
+
+        score = ranking_score(data)
+
+        ranked.append((score, format_dataset(d)))
+
+    ranked.sort(key=lambda x: x[0], reverse=True)
+
+    return [r[1] for r in ranked[:limit]]

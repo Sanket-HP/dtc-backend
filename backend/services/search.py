@@ -14,11 +14,11 @@ from ..firebase_config import db
 # -------------------------------------------------
 # SMART DATASET SEARCH WITH RELEVANCE SCORING
 # -------------------------------------------------
-def search_datasets(query: str):
+def search_datasets(query: str, limit: int = 25):
 
-    query = query.lower()
+    query = str(query).lower().strip()
 
-    docs = db.collection("datasets").stream()
+    docs = db.collection("datasets").limit(500).stream()
 
     ranked_results = []
 
@@ -30,25 +30,25 @@ def search_datasets(query: str):
         description = str(data.get("description", "")).lower()
         category = str(data.get("category", "")).lower()
 
-        quality = data.get("quality_score", 0)
-        trust = data.get("trust_score", 0)
-        ai_score = data.get("ai_training_score", 0)
-        downloads = data.get("download_count", 0)
-        dataset_value = data.get("dataset_value", 0)
+        quality = float(data.get("quality_score", 0))
+        trust = float(data.get("trust_score", 0))
+        ai_score = float(data.get("ai_training_score", 0))
+        downloads = int(data.get("download_count", 0))
+        dataset_value = float(data.get("dataset_value", 0))
 
         score = 0
 
         # title match (highest weight)
         if query in title:
-            score += 3
+            score += 5
 
         # description match
         if query in description:
-            score += 2
+            score += 3
 
         # category match
         if query in category:
-            score += 1
+            score += 2
 
         if score > 0:
 
@@ -57,7 +57,7 @@ def search_datasets(query: str):
                 (quality * 2) +
                 (trust * 1.5) +
                 (ai_score * 2) +
-                (downloads * 0.01) +
+                (downloads * 0.02) +
                 (dataset_value * 0.5)
             )
 
@@ -78,17 +78,18 @@ def search_datasets(query: str):
 
     ranked_results.sort(key=lambda x: x["ranking"], reverse=True)
 
-    return ranked_results
+    return ranked_results[:limit]
 
 
 # -------------------------------------------------
 # FILTER DATASETS BY CATEGORY
 # -------------------------------------------------
-def filter_by_category(category: str):
+def filter_by_category(category: str, limit: int = 50):
 
     docs = (
         db.collection("datasets")
         .where("category", "==", category)
+        .limit(limit)
         .stream()
     )
 
@@ -116,12 +117,12 @@ def filter_by_category(category: str):
 # -------------------------------------------------
 # TRENDING DATASETS (Most Downloaded)
 # -------------------------------------------------
-def trending_datasets():
+def trending_datasets(limit: int = 10):
 
     docs = (
         db.collection("datasets")
         .order_by("download_count", direction="DESCENDING")
-        .limit(10)
+        .limit(limit)
         .stream()
     )
 
@@ -147,12 +148,12 @@ def trending_datasets():
 # -------------------------------------------------
 # BEST QUALITY DATASETS
 # -------------------------------------------------
-def best_quality_datasets():
+def best_quality_datasets(limit: int = 10):
 
     docs = (
         db.collection("datasets")
         .order_by("quality_score", direction="DESCENDING")
-        .limit(10)
+        .limit(limit)
         .stream()
     )
 
@@ -178,12 +179,12 @@ def best_quality_datasets():
 # -------------------------------------------------
 # MOST TRUSTED DATASETS
 # -------------------------------------------------
-def most_trusted_datasets():
+def most_trusted_datasets(limit: int = 10):
 
     docs = (
         db.collection("datasets")
         .order_by("trust_score", direction="DESCENDING")
-        .limit(10)
+        .limit(limit)
         .stream()
     )
 

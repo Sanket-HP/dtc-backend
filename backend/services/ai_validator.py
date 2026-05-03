@@ -6,6 +6,8 @@ Detects:
 - copied datasets
 - low diversity datasets
 - structural anomalies
+- duplicate rows
+- type inconsistencies
 """
 
 import json
@@ -22,17 +24,19 @@ def calculate_entropy(values):
     if not values:
         return 0
 
+    values = [str(v) for v in values]
+
     counter = Counter(values)
 
     entropy = 0
-
     total = len(values)
 
     for c in counter.values():
 
         p = c / total
 
-        entropy -= p * math.log2(p)
+        if p > 0:
+            entropy -= p * math.log2(p)
 
     return entropy
 
@@ -73,8 +77,10 @@ def detect_random_dataset(rows):
 
     entropy = calculate_entropy(values)
 
-    # extremely high entropy can indicate random data
-    if entropy > 7:
+    # normalized entropy
+    normalized = entropy / max(len(values), 1)
+
+    if entropy > 7 and normalized > 0.01:
         return True
 
     return False
@@ -104,21 +110,60 @@ def detect_low_diversity(rows):
 
 
 # -------------------------------------------------
+# DUPLICATE ROW DETECTION
+# -------------------------------------------------
+def detect_duplicate_rows(rows):
+
+    if not rows:
+        return True
+
+    normalized = [json.dumps(r, sort_keys=True) for r in rows]
+
+    unique = len(set(normalized))
+
+    duplicate_ratio = 1 - (unique / len(rows))
+
+    return duplicate_ratio > 0.5
+
+
+# -------------------------------------------------
+# TYPE CONSISTENCY CHECK
+# -------------------------------------------------
+def detect_type_inconsistency(rows):
+
+    if not rows:
+        return False
+
+    columns = rows[0].keys()
+
+    inconsistent_columns = 0
+
+    for col in columns:
+
+        types = set(type(r.get(col)).__name__ for r in rows if col in r)
+
+        if len(types) > 3:
+            inconsistent_columns += 1
+
+    return inconsistent_columns > len(columns) * 0.3
+
+
+# -------------------------------------------------
 # AI GENERATED DATASET DETECTION
 # -------------------------------------------------
 def detect_ai_generated(rows):
 
     patterns = Counter()
 
-    for r in rows[:100]:
+    for r in rows[:200]:
 
-        pattern = tuple(r.values())
+        pattern = tuple(str(v) for v in r.values())
 
         patterns[pattern] += 1
 
     most_common = patterns.most_common(1)
 
-    if most_common and most_common[0][1] > 10:
+    if most_common and most_common[0][1] > 15:
         return True
 
     return False
@@ -171,7 +216,9 @@ def compute_validation_score(issues):
         "random_data_pattern": 0.25,
         "low_column_diversity": 0.2,
         "ai_generated_pattern": 0.25,
-        "structure_anomaly": 0.15
+        "structure_anomaly": 0.15,
+        "duplicate_rows": 0.2,
+        "type_inconsistency": 0.15
     }
 
     for issue in issues:
@@ -187,6 +234,9 @@ def validate_dataset(rows):
 
     problems = []
 
+    if len(rows) < 20:
+        problems.append("dataset_too_small")
+
     if detect_low_variance(rows):
         problems.append("low_variance_columns")
 
@@ -201,6 +251,12 @@ def validate_dataset(rows):
 
     if detect_structure_anomaly(rows):
         problems.append("structure_anomaly")
+
+    if detect_duplicate_rows(rows):
+        problems.append("duplicate_rows")
+
+    if detect_type_inconsistency(rows):
+        problems.append("type_inconsistency")
 
     validation_score = compute_validation_score(problems)
 

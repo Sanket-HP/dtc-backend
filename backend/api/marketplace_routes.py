@@ -21,9 +21,10 @@ async def list_marketplace(
     category: str | None = Query(None),
     min_quality: float | None = Query(None),
     min_trust: float | None = Query(None),
+    limit: int = Query(50),
 ):
 
-    docs = db.collection("datasets").stream()
+    docs = db.collection("datasets").limit(500).stream()
 
     datasets = []
 
@@ -44,11 +45,14 @@ async def list_marketplace(
         datasets.append(data)
 
     datasets.sort(
-        key=lambda x: x.get("created_at", datetime.min.replace(tzinfo=timezone.utc)),
+        key=lambda x: (
+            x.get("trust_score", 0),
+            x.get("download_count", 0)
+        ),
         reverse=True
     )
 
-    return datasets
+    return datasets[:limit]
 
 
 # -------------------------------------------------
@@ -80,7 +84,7 @@ async def trending_datasets():
 @router.get("/featured")
 async def featured_datasets():
 
-    docs = db.collection("datasets").stream()
+    docs = db.collection("datasets").limit(300).stream()
 
     datasets = []
 
@@ -224,7 +228,6 @@ async def purchase_dataset(
         "purchase_count": dataset.get("purchase_count", 0) + 1
     })
 
-    # Save purchase
     purchase_ref = db.collection("purchases").document()
 
     purchase_data = {
@@ -238,7 +241,7 @@ async def purchase_dataset(
 
     purchase_ref.set(purchase_data)
 
-    # Log transaction
+    # Transaction log
     db.collection("transactions").add({
         "user_id": user["id"],
         "dataset_id": body.dataset_id,

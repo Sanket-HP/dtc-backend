@@ -20,16 +20,13 @@ from .deps import get_current_user_id
 from ..services.anti_spam import is_spam_dataset
 from ..services.ai_validator import validate_dataset
 from ..services.dataset_ai_score import compute_ai_score
-from ..services.data_valuation import (
-    compute_dataset_value,
-    compute_token_reward
-)
+from ..services.data_valuation import compute_dataset_value, compute_token_reward
 
 router = APIRouter(prefix="/datasets", tags=["datasets"])
 
 
 # -------------------------------------------------
-# DATASET HASH GENERATION (DUPLICATE DETECTION)
+# DATASET HASH GENERATION (GLOBAL DUPLICATE DETECTION)
 # -------------------------------------------------
 def generate_dataset_hash(rows):
 
@@ -39,6 +36,24 @@ def generate_dataset_hash(rows):
     )
 
     return hashlib.sha256(normalized.encode()).hexdigest()
+
+
+# -------------------------------------------------
+# PARTIAL SIMILARITY DETECTION
+# prevents users uploading slightly modified datasets
+# -------------------------------------------------
+def dataset_similarity(rows1, rows2):
+
+    set1 = set(json.dumps(r, sort_keys=True) for r in rows1[:500])
+    set2 = set(json.dumps(r, sort_keys=True) for r in rows2[:500])
+
+    if not set1 or not set2:
+        return 0
+
+    intersection = len(set1.intersection(set2))
+    union = len(set1.union(set2))
+
+    return intersection / union
 
 
 # -------------------------------------------------
@@ -130,8 +145,8 @@ async def upload_dataset(
 
     content = await file.read()
 
-    if len(content) > 10 * 1024 * 1024:
-        raise HTTPException(400, "File too large")
+    if len(content) > 20 * 1024 * 1024:
+        raise HTTPException(400, "File too large (max 20MB)")
 
     # Parse dataset
     if file.filename.endswith(".csv"):
@@ -147,14 +162,16 @@ async def upload_dataset(
     else:
         raise HTTPException(400, "Only CSV or JSON allowed")
 
-    if len(rows) == 0:
-        raise HTTPException(400, "Dataset empty")
+    if len(rows) < 20:
+        raise HTTPException(400, "Dataset too small (minimum 20 rows)")
 
     rows = anonymize_dataset(rows)
 
+    # Spam detection
     if is_spam_dataset(rows):
         raise HTTPException(400, "Dataset rejected: spam dataset detected")
 
+    # AI validation
     validation = validate_dataset(rows)
 
     if not validation["valid"]:
@@ -162,6 +179,9 @@ async def upload_dataset(
 
     dataset_hash = generate_dataset_hash(rows)
 
+    # -------------------------------------------------
+    # GLOBAL DUPLICATE DETECTION
+    # -------------------------------------------------
     existing = (
         db.collection("datasets")
         .where("dataset_hash", "==", dataset_hash)
@@ -172,6 +192,30 @@ async def upload_dataset(
     if existing:
         raise HTTPException(400, "This dataset already exists on the platform.")
 
+    # -------------------------------------------------
+    # SIMILAR DATASET DETECTION
+    # -------------------------------------------------
+    docs = db.collection("datasets").limit(50).stream()
+
+    for d in docs:
+
+        data = d.to_dict()
+
+        sample = data.get("sample_records")
+
+        if sample:
+
+            similarity = dataset_similarity(rows, sample)
+
+            if similarity > 0.9:
+                raise HTTPException(
+                    400,
+                    "Dataset too similar to existing dataset."
+                )
+
+    # -------------------------------------------------
+    # SCORING
+    # -------------------------------------------------
     quality_score = analyze_dataset(rows)
 
     ai_score = compute_ai_score(rows)
@@ -196,6 +240,9 @@ async def upload_dataset(
 
     file_url = blob.public_url
 
+    # -------------------------------------------------
+    # SAVE DATASET
+    # -------------------------------------------------
     dataset_data = {
         "id": dataset_id,
         "owner_id": user_id,
@@ -206,18 +253,22 @@ async def upload_dataset(
         "quality_score": quality_score,
         "ai_training_score": ai_score,
         "dataset_value": dataset_value,
-        "trust_score": (quality_score + ai_score) / 2,
+        "trust_score": round((quality_score + ai_score) / 2, 2),
         "rating": 0,
         "rating_count": 0,
         "download_count": 0,
         "purchase_count": 0,
         "dataset_hash": dataset_hash,
         "file_url": file_url,
+        "sample_records": rows[:20],
         "created_at": datetime.now(timezone.utc)
     }
 
     db.collection("datasets").document(dataset_id).set(dataset_data)
 
+    # -------------------------------------------------
+    # UPDATE USER WALLET
+    # -------------------------------------------------
     user_ref = db.collection("users").document(user_id)
     user_doc = user_ref.get()
 
@@ -241,91 +292,3 @@ async def upload_dataset(
     dataset_data["token_reward"] = reward
 
     return dataset_data
-
-
-# -------------------------------------------------
-# DATASET PREVIEW
-# -------------------------------------------------
-@router.get("/{dataset_id}/preview")
-async def preview_dataset(dataset_id: str):
-
-    doc = db.collection("datasets").document(dataset_id).get()
-
-    if not doc.exists:
-        raise HTTPException(404, "Dataset not found")
-
-    data = doc.to_dict()
-
-    return {
-        "id": dataset_id,
-        "title": data.get("title"),
-        "description": data.get("description"),
-        "record_count": data.get("record_count"),
-        "quality_score": data.get("quality_score"),
-        "ai_training_score": data.get("ai_training_score"),
-        "trust_score": data.get("trust_score"),
-    }
-
-
-# -------------------------------------------------
-# DOWNLOAD DATASET
-# -------------------------------------------------
-@router.get("/{dataset_id}/download")
-async def download_dataset(dataset_id: str):
-
-    doc_ref = db.collection("datasets").document(dataset_id)
-
-    doc = doc_ref.get()
-
-    if not doc.exists:
-        raise HTTPException(404, "Dataset not found")
-
-    data = doc.to_dict()
-
-    downloads = data.get("download_count", 0) + 1
-
-    doc_ref.update({"download_count": downloads})
-
-    return {"file_url": data.get("file_url")}
-
-
-# -------------------------------------------------
-# RATE DATASET
-# -------------------------------------------------
-@router.post("/{dataset_id}/rate")
-async def rate_dataset(
-    dataset_id: str,
-    rating: float,
-    user_id: str = Depends(get_current_user_id)
-):
-
-    if rating < 1 or rating > 5:
-        raise HTTPException(400, "Rating must be between 1 and 5")
-
-    doc_ref = db.collection("datasets").document(dataset_id)
-
-    doc = doc_ref.get()
-
-    if not doc.exists:
-        raise HTTPException(404, "Dataset not found")
-
-    data = doc.to_dict()
-
-    current_rating = data.get("rating", 0)
-    rating_count = data.get("rating_count", 0)
-
-    new_rating = (
-        (current_rating * rating_count + rating) /
-        (rating_count + 1)
-    )
-
-    doc_ref.update({
-        "rating": new_rating,
-        "rating_count": rating_count + 1
-    })
-
-    return {
-        "dataset_id": dataset_id,
-        "rating": round(new_rating, 2),
-        "rating_count": rating_count + 1
-    }
