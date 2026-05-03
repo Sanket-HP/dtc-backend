@@ -1,6 +1,6 @@
 """Leaderboard routes for DataTrust Coin platform."""
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from google.cloud import firestore
 from ..firebase_config import db
 
@@ -11,39 +11,39 @@ router = APIRouter(prefix="/leaderboard", tags=["leaderboard"])
 # TOP CONTRIBUTORS (BY TOKEN BALANCE)
 # -------------------------------------------------
 @router.get("/contributors")
-async def top_contributors():
+async def top_contributors(limit: int = Query(10, ge=1, le=50)):
 
-    docs = (
-        db.collection("users")
-        .where("status", "==", "active")
-        .order_by("token_balance", direction=firestore.Query.DESCENDING)
-        .limit(10)
-        .stream()
-    )
+    docs = db.collection("users").stream()
 
-    results = []
+    users = []
 
     for d in docs:
 
         data = d.to_dict() or {}
 
-        results.append({
+        # ignore deleted users
+        if data.get("status") == "deleted":
+            continue
+
+        users.append({
             "user_id": d.id,
             "username": data.get("username", "anonymous"),
             "full_name": data.get("full_name"),
-            "token_balance": data.get("token_balance", 0),
+            "token_balance": float(data.get("token_balance", 0)),
             "datasets_uploaded": data.get("datasets_uploaded", 0),
             "tokens_earned": data.get("tokens_earned", 0)
         })
 
-    return results
+    users.sort(key=lambda x: x["token_balance"], reverse=True)
+
+    return users[:limit]
 
 
 # -------------------------------------------------
 # TOP DATASET CREATORS
 # -------------------------------------------------
 @router.get("/creators")
-async def top_dataset_creators():
+async def top_dataset_creators(limit: int = Query(10, ge=1, le=50)):
 
     docs = db.collection("datasets").stream()
 
@@ -63,7 +63,7 @@ async def top_dataset_creators():
         creator_counts.items(),
         key=lambda x: x[1],
         reverse=True
-    )[:10]
+    )[:limit]
 
     results = []
 
@@ -71,20 +71,21 @@ async def top_dataset_creators():
 
         user_doc = db.collection("users").document(user_id).get()
 
-        if user_doc.exists:
+        if not user_doc.exists:
+            continue
 
-            user = user_doc.to_dict() or {}
+        user = user_doc.to_dict() or {}
 
-            if user.get("status") != "active":
-                continue
+        if user.get("status") == "deleted":
+            continue
 
-            results.append({
-                "user_id": user_id,
-                "username": user.get("username", "anonymous"),
-                "datasets_uploaded": count,
-                "token_balance": user.get("token_balance", 0),
-                "tokens_earned": user.get("tokens_earned", 0)
-            })
+        results.append({
+            "user_id": user_id,
+            "username": user.get("username", "anonymous"),
+            "datasets_uploaded": count,
+            "token_balance": user.get("token_balance", 0),
+            "tokens_earned": user.get("tokens_earned", 0)
+        })
 
     return results
 
@@ -93,22 +94,17 @@ async def top_dataset_creators():
 # TOP DATASETS (BY QUALITY)
 # -------------------------------------------------
 @router.get("/datasets")
-async def top_datasets():
+async def top_datasets(limit: int = Query(10, ge=1, le=50)):
 
-    docs = (
-        db.collection("datasets")
-        .order_by("quality_score", direction=firestore.Query.DESCENDING)
-        .limit(10)
-        .stream()
-    )
+    docs = db.collection("datasets").stream()
 
-    results = []
+    datasets = []
 
     for d in docs:
 
         data = d.to_dict() or {}
 
-        results.append({
+        datasets.append({
             "dataset_id": d.id,
             "title": data.get("title"),
             "category": data.get("category"),
@@ -118,29 +114,26 @@ async def top_datasets():
             "price": data.get("price", 0)
         })
 
-    return results
+    datasets.sort(key=lambda x: x["quality_score"], reverse=True)
+
+    return datasets[:limit]
 
 
 # -------------------------------------------------
 # MOST DOWNLOADED DATASETS
 # -------------------------------------------------
 @router.get("/downloads")
-async def most_downloaded_datasets():
+async def most_downloaded_datasets(limit: int = Query(10, ge=1, le=50)):
 
-    docs = (
-        db.collection("datasets")
-        .order_by("downloads", direction=firestore.Query.DESCENDING)
-        .limit(10)
-        .stream()
-    )
+    docs = db.collection("datasets").stream()
 
-    results = []
+    datasets = []
 
     for d in docs:
 
         data = d.to_dict() or {}
 
-        results.append({
+        datasets.append({
             "dataset_id": d.id,
             "title": data.get("title"),
             "category": data.get("category"),
@@ -149,29 +142,26 @@ async def most_downloaded_datasets():
             "price": data.get("price", 0)
         })
 
-    return results
+    datasets.sort(key=lambda x: x["downloads"], reverse=True)
+
+    return datasets[:limit]
 
 
 # -------------------------------------------------
 # HIGHEST RATED DATASETS
 # -------------------------------------------------
 @router.get("/ratings")
-async def highest_rated_datasets():
+async def highest_rated_datasets(limit: int = Query(10, ge=1, le=50)):
 
-    docs = (
-        db.collection("datasets")
-        .order_by("rating", direction=firestore.Query.DESCENDING)
-        .limit(10)
-        .stream()
-    )
+    docs = db.collection("datasets").stream()
 
-    results = []
+    datasets = []
 
     for d in docs:
 
         data = d.to_dict() or {}
 
-        results.append({
+        datasets.append({
             "dataset_id": d.id,
             "title": data.get("title"),
             "category": data.get("category"),
@@ -180,29 +170,26 @@ async def highest_rated_datasets():
             "downloads": data.get("downloads", 0)
         })
 
-    return results
+    datasets.sort(key=lambda x: x["rating"], reverse=True)
+
+    return datasets[:limit]
 
 
 # -------------------------------------------------
 # TOP AI DATASETS
 # -------------------------------------------------
 @router.get("/ai-datasets")
-async def top_ai_datasets():
+async def top_ai_datasets(limit: int = Query(10, ge=1, le=50)):
 
-    docs = (
-        db.collection("datasets")
-        .order_by("ai_training_score", direction=firestore.Query.DESCENDING)
-        .limit(10)
-        .stream()
-    )
+    docs = db.collection("datasets").stream()
 
-    results = []
+    datasets = []
 
     for d in docs:
 
         data = d.to_dict() or {}
 
-        results.append({
+        datasets.append({
             "dataset_id": d.id,
             "title": data.get("title"),
             "category": data.get("category"),
@@ -211,29 +198,26 @@ async def top_ai_datasets():
             "downloads": data.get("downloads", 0)
         })
 
-    return results
+    datasets.sort(key=lambda x: x["ai_training_score"], reverse=True)
+
+    return datasets[:limit]
 
 
 # -------------------------------------------------
 # HIGHEST VALUE DATASETS
 # -------------------------------------------------
 @router.get("/value")
-async def highest_value_datasets():
+async def highest_value_datasets(limit: int = Query(10, ge=1, le=50)):
 
-    docs = (
-        db.collection("datasets")
-        .order_by("dataset_value", direction=firestore.Query.DESCENDING)
-        .limit(10)
-        .stream()
-    )
+    docs = db.collection("datasets").stream()
 
-    results = []
+    datasets = []
 
     for d in docs:
 
         data = d.to_dict() or {}
 
-        results.append({
+        datasets.append({
             "dataset_id": d.id,
             "title": data.get("title"),
             "dataset_value": data.get("dataset_value", 0),
@@ -242,4 +226,6 @@ async def highest_value_datasets():
             "price": data.get("price", 0)
         })
 
-    return results
+    datasets.sort(key=lambda x: x["dataset_value"], reverse=True)
+
+    return datasets[:limit]
