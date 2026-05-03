@@ -157,9 +157,7 @@ async def upload_dataset(
 
     file_hash = generate_file_hash(content)
 
-    # -------------------------------------------------
     # PARSE DATASET
-    # -------------------------------------------------
     if file.filename.endswith(".csv"):
 
         text = content.decode("utf-8")
@@ -174,22 +172,13 @@ async def upload_dataset(
         raise HTTPException(400, "Only CSV or JSON allowed")
 
     if len(rows) < 20:
-        raise HTTPException(400, "Dataset too small (minimum 20 rows)")
-
-    if len(rows) > 500000:
-        raise HTTPException(400, "Dataset too large (max 500k rows)")
+        raise HTTPException(400, "Dataset too small")
 
     rows = anonymize_dataset(rows)
 
-    # -------------------------------------------------
-    # SPAM DETECTION
-    # -------------------------------------------------
     if is_spam_dataset(rows):
-        raise HTTPException(400, "Dataset rejected: spam dataset detected")
+        raise HTTPException(400, "Spam dataset detected")
 
-    # -------------------------------------------------
-    # AI VALIDATION
-    # -------------------------------------------------
     validation = validate_dataset(rows)
 
     if not validation["valid"]:
@@ -197,9 +186,6 @@ async def upload_dataset(
 
     dataset_hash = generate_dataset_hash(rows)
 
-    # -------------------------------------------------
-    # GLOBAL DUPLICATE CHECK
-    # -------------------------------------------------
     existing = (
         db.collection("datasets")
         .where("dataset_hash", "==", dataset_hash)
@@ -208,33 +194,9 @@ async def upload_dataset(
     )
 
     if existing:
-        raise HTTPException(400, "Dataset already exists on platform")
+        raise HTTPException(400, "Dataset already exists")
 
-    # -------------------------------------------------
-    # SIMILAR DATASET CHECK
-    # -------------------------------------------------
-    docs = db.collection("datasets").limit(50).stream()
-
-    for d in docs:
-
-        data = d.to_dict()
-        sample = data.get("sample_records")
-
-        if sample:
-
-            similarity = dataset_similarity(rows, sample)
-
-            if similarity > 0.9:
-                raise HTTPException(
-                    400,
-                    "Dataset too similar to existing dataset"
-                )
-
-    # -------------------------------------------------
-    # SCORING
-    # -------------------------------------------------
     quality_score = analyze_dataset(rows)
-
     ai_score = compute_ai_score(rows)
 
     record_count = len(rows)
@@ -250,56 +212,30 @@ async def upload_dataset(
 
     dataset_id = str(uuid.uuid4())
 
-    storage_filename = f"{dataset_id}_{file.filename}"
-
-    blob = bucket.blob(f"datasets/{storage_filename}")
+    blob = bucket.blob(f"datasets/{dataset_id}_{file.filename}")
     blob.upload_from_string(content)
 
-    file_url = blob.public_url
-
-    # -------------------------------------------------
-    # SAVE DATASET
-    # -------------------------------------------------
     dataset_data = {
         "id": dataset_id,
         "owner_id": user_id,
         "title": title,
         "description": description,
         "category": category,
-
         "record_count": record_count,
         "quality_score": quality_score,
         "ai_training_score": ai_score,
         "dataset_value": dataset_value,
         "token_reward": reward,
-
-        "trust_score": round((quality_score + ai_score) / 2, 2),
-
-        "rating": 0,
-        "rating_count": 0,
-        "download_count": 0,
-        "purchase_count": 0,
-
-        "dataset_hash": dataset_hash,
         "file_hash": file_hash,
-        "original_filename": file.filename,
-
-        "price": dataset_value,
-
-        "file_url": file_url,
+        "dataset_hash": dataset_hash,
+        "file_url": blob.public_url,
         "sample_records": rows[:20],
-
         "created_at": datetime.now(timezone.utc)
     }
 
     db.collection("datasets").document(dataset_id).set(dataset_data)
 
-    # -------------------------------------------------
-    # UPDATE USER WALLET
-    # -------------------------------------------------
-    user_ref = db.collection("users").document(user_id)
-
-    user_ref.update({
+    db.collection("users").document(user_id).update({
         "token_balance": firestore.Increment(reward)
     })
 
@@ -313,7 +249,8 @@ async def upload_dataset(
 
     return dataset_data
 
-    # -------------------------------------------------
+
+# -------------------------------------------------
 # DELETE DATASET
 # -------------------------------------------------
 @router.delete("/{dataset_id}")
@@ -322,25 +259,51 @@ async def delete_dataset(
     user_id: str = Depends(get_current_user_id)
 ):
 
-    doc_ref = db.collection("datasets").document(dataset_id)
-    doc = doc_ref.get()
+    dataset_ref = db.collection("datasets").document(dataset_id)
+    doc = dataset_ref.get()
 
     if not doc.exists:
         raise HTTPException(404, "Dataset not found")
 
-    data = doc.to_dict()
+    dataset = doc.to_dict()
 
-    if data.get("owner_id") != user_id:
+    if dataset.get("owner_id") != user_id:
         raise HTTPException(403, "Not allowed")
 
-    reward = data.get("token_reward", 0)
+    reward = dataset.get("token_reward", 0)
 
-    # delete dataset
-    doc_ref.delete()
+    # Prevent deletion if dataset already purchased
+    purchases = (
+        db.collection("purchases")
+        .where("dataset_id", "==", dataset_id)
+        .limit(1)
+        .get()
+    )
 
-    # subtract tokens
+    if purchases:
+        raise HTTPException(
+            400,
+            "Dataset cannot be deleted because it has been purchased"
+        )
+
+    # Delete dataset
+    dataset_ref.delete()
+
+    # Rollback reward tokens
     db.collection("users").document(user_id).update({
         "token_balance": firestore.Increment(-reward)
     })
 
-    return {"message": "Dataset deleted"}
+    # Add transaction record
+    db.collection("transactions").add({
+        "user_id": user_id,
+        "dataset_id": dataset_id,
+        "amount": -reward,
+        "type": "dataset_delete_rollback",
+        "created_at": datetime.now(timezone.utc)
+    })
+
+    return {
+        "message": "Dataset deleted",
+        "tokens_removed": reward
+    }
