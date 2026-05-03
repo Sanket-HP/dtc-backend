@@ -90,11 +90,9 @@ def compute_quality_score(rows):
     if record_count == 0:
         return 0
 
-    # uniqueness
     unique_rows = len(set(json.dumps(r, sort_keys=True) for r in rows))
     uniqueness_ratio = unique_rows / record_count
 
-    # completeness
     total_fields = 0
     filled_fields = 0
 
@@ -106,7 +104,6 @@ def compute_quality_score(rows):
 
     completeness_ratio = filled_fields / total_fields if total_fields else 0
 
-    # column consistency
     column_counts = [len(r.keys()) for r in rows]
     consistency_ratio = min(column_counts) / max(column_counts)
 
@@ -133,7 +130,6 @@ async def upload_dataset(
 
     content = await file.read()
 
-    # file size protection
     if len(content) > 20 * 1024 * 1024:
         raise HTTPException(400, "File too large. Maximum 20MB allowed.")
 
@@ -164,7 +160,6 @@ async def upload_dataset(
 
     ai_score = compute_ai_score(rows)
 
-    # FIXED QUALITY CALCULATION
     quality_score = compute_quality_score(rows)
 
     dataset_value = compute_dataset_value(
@@ -195,40 +190,35 @@ async def upload_dataset(
         "title": title,
         "description": description,
         "category": category,
-
         "owner_id": user_id,
-
         "record_count": record_count,
-
         "quality_score": quality_score,
         "ai_training_score": round(ai_score, 2),
-
         "dataset_value": dataset_value,
-
         "token_reward": token_reward,
-
         "price": price,
         "trust_score": trust_score,
-
         "downloads": 0,
         "rating": 0,
         "rating_count": 0,
-
         "dataset_hash": dataset_hash,
-
         "sample_records": rows[:5],
-
         "file_url": file_url,
-
         "created_at": datetime.now(timezone.utc)
     }
 
     db.collection("datasets").document(dataset_id).set(dataset_data)
 
+    # reward user
     db.collection("users").document(user_id).update({
         "token_balance": firestore.Increment(token_reward),
         "tokens_earned": firestore.Increment(token_reward),
         "datasets_uploaded": firestore.Increment(1)
+    })
+
+    # update circulating supply
+    db.collection("token_stats").document("token_stats").update({
+        "circulating_supply": firestore.Increment(token_reward)
     })
 
     db.collection("transactions").add({
@@ -295,6 +285,11 @@ async def delete_dataset(
         "token_balance": firestore.Increment(-token_reward),
         "tokens_earned": firestore.Increment(-token_reward),
         "datasets_uploaded": firestore.Increment(-1)
+    })
+
+    # reduce circulating supply
+    db.collection("token_stats").document("token_stats").update({
+        "circulating_supply": firestore.Increment(-token_reward)
     })
 
     db.collection("transactions").add({
