@@ -312,3 +312,35 @@ async def upload_dataset(
     })
 
     return dataset_data
+
+    # -------------------------------------------------
+# DELETE DATASET
+# -------------------------------------------------
+@router.delete("/{dataset_id}")
+async def delete_dataset(
+    dataset_id: str,
+    user_id: str = Depends(get_current_user_id)
+):
+
+    doc_ref = db.collection("datasets").document(dataset_id)
+    doc = doc_ref.get()
+
+    if not doc.exists:
+        raise HTTPException(404, "Dataset not found")
+
+    data = doc.to_dict()
+
+    if data.get("owner_id") != user_id:
+        raise HTTPException(403, "Not allowed")
+
+    reward = data.get("token_reward", 0)
+
+    # delete dataset
+    doc_ref.delete()
+
+    # subtract tokens
+    db.collection("users").document(user_id).update({
+        "token_balance": firestore.Increment(-reward)
+    })
+
+    return {"message": "Dataset deleted"}
