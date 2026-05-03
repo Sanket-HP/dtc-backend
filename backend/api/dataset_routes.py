@@ -268,3 +268,32 @@ async def list_datasets():
         results.append(data)
 
     return results
+
+# -------------------------------------------------
+# DELETE DATASET
+# -------------------------------------------------
+@router.delete("/{dataset_id}")
+async def delete_dataset(
+    dataset_id: str,
+    user_id: str = Depends(get_current_user_id)
+):
+
+    doc_ref = db.collection("datasets").document(dataset_id)
+    doc = doc_ref.get()
+
+    if not doc.exists:
+        raise HTTPException(404, "Dataset not found")
+
+    dataset = doc.to_dict()
+
+    # only owner can delete
+    if dataset.get("owner_id") != user_id:
+        raise HTTPException(403, "Not authorized to delete this dataset")
+
+    # delete dataset
+    doc_ref.delete()
+
+    return {
+        "message": "Dataset deleted successfully",
+        "dataset_id": dataset_id
+    }
