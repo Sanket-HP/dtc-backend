@@ -104,9 +104,6 @@ async def upload_dataset(
 
     dataset_hash = generate_dataset_hash(rows)
 
-    # -------------------------------------------------
-    # DUPLICATE DATASET CHECK
-    # -------------------------------------------------
     existing = (
         db.collection("datasets")
         .where("dataset_hash", "==", dataset_hash)
@@ -122,15 +119,12 @@ async def upload_dataset(
 
     record_count = len(rows)
 
-    # AI scoring
     ai_score = compute_ai_score(rows)
 
-    # quality score
     quality_score = 1 - (
         len(set(json.dumps(r, sort_keys=True) for r in rows)) / record_count
     )
 
-    # dataset value
     dataset_value = compute_dataset_value(
         record_count,
         quality_score,
@@ -140,18 +134,14 @@ async def upload_dataset(
         created_at=datetime.now(timezone.utc)
     )
 
-    # token reward
     token_reward = compute_token_reward(record_count, dataset_value)
 
-    # dataset price
     price = calculate_dataset_price(dataset_value, record_count)
 
-    # trust score
     trust_score = calculate_trust_score(quality_score, ai_score, dataset_value)
 
     dataset_id = str(uuid.uuid4())
 
-    # upload to Firebase storage
     blob = bucket.blob(f"datasets/{dataset_id}/{file.filename}")
     blob.upload_from_string(content)
 
@@ -193,9 +183,6 @@ async def upload_dataset(
 
     db.collection("datasets").document(dataset_id).set(dataset_data)
 
-    # -------------------------------------------------
-    # REWARD USER FOR DATASET
-    # -------------------------------------------------
     db.collection("users").document(user_id).update({
         "token_balance": firestore.Increment(token_reward),
         "tokens_earned": firestore.Increment(token_reward),
@@ -209,39 +196,6 @@ async def upload_dataset(
         "type": "dataset_upload_reward",
         "created_at": datetime.now(timezone.utc)
     })
-
-    # -------------------------------------------------
-    # REFERRAL REWARD
-    # -------------------------------------------------
-    user_doc = db.collection("users").document(user_id).get()
-
-    if user_doc.exists:
-
-        user_data = user_doc.to_dict()
-        referred_by = user_data.get("referred_by")
-
-        if referred_by:
-
-            ref_query = (
-                db.collection("users")
-                .where("referral_code", "==", referred_by)
-                .limit(1)
-                .stream()
-            )
-
-            for ref in ref_query:
-
-                ref.reference.update({
-                    "token_balance": firestore.Increment(2),
-                    "referral_earnings": firestore.Increment(2)
-                })
-
-                db.collection("transactions").add({
-                    "user_id": ref.id,
-                    "amount": 2,
-                    "type": "referral_upload_reward",
-                    "created_at": datetime.now(timezone.utc)
-                })
 
     return {
         "message": "Dataset uploaded successfully",
@@ -269,8 +223,9 @@ async def list_datasets():
 
     return results
 
+
 # -------------------------------------------------
-# DELETE DATASET
+# DELETE DATASET (FIXED VERSION)
 # -------------------------------------------------
 @router.delete("/{dataset_id}")
 async def delete_dataset(
@@ -286,14 +241,41 @@ async def delete_dataset(
 
     dataset = doc.to_dict()
 
-    # only owner can delete
     if dataset.get("owner_id") != user_id:
-        raise HTTPException(403, "Not authorized to delete this dataset")
+        raise HTTPException(403, "Not authorized")
 
-    # delete dataset
+    token_reward = dataset.get("token_reward", 0)
+
+    # Prevent deleting sold datasets
+    if dataset.get("downloads", 0) > 0:
+        raise HTTPException(400, "Cannot delete dataset that has been purchased")
+
+    # Remove tokens from user wallet
+    db.collection("users").document(user_id).update({
+        "token_balance": firestore.Increment(-token_reward),
+        "tokens_earned": firestore.Increment(-token_reward),
+        "datasets_uploaded": firestore.Increment(-1)
+    })
+
+    # Add reverse transaction
+    db.collection("transactions").add({
+        "user_id": user_id,
+        "dataset_id": dataset_id,
+        "amount": -token_reward,
+        "type": "dataset_delete_penalty",
+        "created_at": datetime.now(timezone.utc)
+    })
+
+    # Delete dataset file from storage
+    file_url = dataset.get("file_url")
+
+    if file_url:
+        filename = file_url.split("/")[-1]
+        blob = bucket.blob(f"datasets/{dataset_id}/{filename}")
+        blob.delete()
+
     doc_ref.delete()
 
     return {
-        "message": "Dataset deleted successfully",
-        "dataset_id": dataset_id
+        "message": "Dataset deleted successfully"
     }
