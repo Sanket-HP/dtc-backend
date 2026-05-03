@@ -39,6 +39,7 @@ async def register(body: RegisterRequest):
             "full_name": body.full_name,
             "is_company": body.is_company,
             "token_balance": 0,
+            "status": "active",  # NEW
             "created_at": datetime.now(timezone.utc)
         }
 
@@ -94,7 +95,7 @@ async def login(body: LoginRequest):
 
 
 # -------------------------------------------------
-# CURRENT USER (FIXED)
+# CURRENT USER
 # -------------------------------------------------
 @router.get("/me", response_model=UserResponse)
 async def get_current_user(
@@ -110,9 +111,65 @@ async def get_current_user(
         )
 
     data = doc.to_dict()
+
+    # prevent deleted users login
+    if data.get("status") == "deleted":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account deleted"
+        )
+
     data["id"] = user_id
 
     return data
+
+
+# -------------------------------------------------
+# DELETE ACCOUNT (NEW)
+# -------------------------------------------------
+@router.delete("/delete-account")
+async def delete_account(
+    user_id: str = Depends(get_current_user_id)
+):
+
+    try:
+
+        # delete user datasets
+        datasets = (
+            db.collection("datasets")
+            .where("owner_id", "==", user_id)
+            .stream()
+        )
+
+        for d in datasets:
+            db.collection("datasets").document(d.id).delete()
+
+        # delete transactions
+        txs = (
+            db.collection("transactions")
+            .where("user_id", "==", user_id)
+            .stream()
+        )
+
+        for t in txs:
+            db.collection("transactions").document(t.id).delete()
+
+        # mark user as deleted (better than full deletion)
+        db.collection("users").document(user_id).update({
+            "status": "deleted",
+            "deleted_at": datetime.now(timezone.utc)
+        })
+
+        # remove firebase auth user
+        auth.delete_user(user_id)
+
+        return {"message": "Account deleted successfully"}
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=str(e)
+        )
 
 
 # -------------------------------------------------

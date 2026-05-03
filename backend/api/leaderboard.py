@@ -7,13 +7,14 @@ router = APIRouter(prefix="/leaderboard", tags=["leaderboard"])
 
 
 # -------------------------------------------------
-# TOP CONTRIBUTORS (HIGHEST TOKEN BALANCE)
+# TOP CONTRIBUTORS (ACTIVE USERS ONLY)
 # -------------------------------------------------
 @router.get("/contributors")
 async def top_contributors():
 
     docs = (
         db.collection("users")
+        .where("status", "==", "active")   # NEW FILTER
         .order_by("token_balance", direction="DESCENDING")
         .limit(10)
         .stream()
@@ -27,7 +28,7 @@ async def top_contributors():
 
         results.append({
             "user_id": d.id,
-            "username": data.get("username"),
+            "username": data.get("username", "anonymous"),
             "full_name": data.get("full_name"),
             "token_balance": data.get("token_balance", 0),
             "datasets_uploaded": data.get("datasets_uploaded", 0)
@@ -73,9 +74,13 @@ async def top_dataset_creators():
 
             user = user_doc.to_dict() or {}
 
+            # ignore deleted users
+            if user.get("status") != "active":
+                continue
+
             results.append({
                 "user_id": user_id,
-                "username": user.get("username"),
+                "username": user.get("username", "anonymous"),
                 "datasets_uploaded": count,
                 "token_balance": user.get("token_balance", 0)
             })

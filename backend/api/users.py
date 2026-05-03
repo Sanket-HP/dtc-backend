@@ -21,6 +21,11 @@ async def get_my_profile(user_id: str = Depends(get_current_user_id)):
         raise HTTPException(404, "User not found")
 
     data = doc.to_dict() or {}
+
+    # prevent deleted users
+    if data.get("status") == "deleted":
+        raise HTTPException(403, "Account deleted")
+
     data["id"] = user_id
 
     return data
@@ -49,7 +54,8 @@ async def get_wallet(user_id: str = Depends(get_current_user_id)):
 
     for t in transactions:
         data = t.to_dict() or {}
-        if data.get("type") == "dataset_reward":
+
+        if data.get("amount", 0) > 0:
             total_earned += data.get("amount", 0)
 
     return {
@@ -112,6 +118,7 @@ async def get_transactions(user_id: str = Depends(get_current_user_id)):
     docs = (
         db.collection("transactions")
         .where("user_id", "==", user_id)
+        .order_by("created_at", direction="DESCENDING")
         .limit(50)
         .stream()
     )
@@ -121,9 +128,14 @@ async def get_transactions(user_id: str = Depends(get_current_user_id)):
     for d in docs:
 
         data = d.to_dict() or {}
-        data["id"] = d.id
 
-        transactions.append(data)
+        transactions.append({
+            "id": d.id,
+            "type": data.get("type"),
+            "amount": data.get("amount", 0),
+            "dataset_id": data.get("dataset_id"),
+            "created_at": data.get("created_at")
+        })
 
     return transactions
 
@@ -172,13 +184,10 @@ async def get_reputation(user_id: str = Depends(get_current_user_id)):
 
     if reputation > 90:
         badge = "Elite Data Architect"
-
     elif reputation > 70:
         badge = "Trusted Data Scientist"
-
     elif reputation > 50:
         badge = "Rising Researcher"
-
     elif reputation > 30:
         badge = "Active Contributor"
 
@@ -237,6 +246,9 @@ async def get_public_profile(user_id: str):
         raise HTTPException(404, "User not found")
 
     data = doc.to_dict() or {}
+
+    if data.get("status") == "deleted":
+        raise HTTPException(404, "User not found")
 
     return {
         "username": data.get("username"),
