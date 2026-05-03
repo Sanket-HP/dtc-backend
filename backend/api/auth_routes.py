@@ -28,18 +28,12 @@ async def register(body: RegisterRequest):
 
     try:
 
-        # -------------------------------------------------
-        # CREATE FIREBASE AUTH USER
-        # -------------------------------------------------
         user_record = auth.create_user(
             email=body.email,
             password=body.password,
             display_name=body.username
         )
 
-        # -------------------------------------------------
-        # REFERRAL VALIDATION
-        # -------------------------------------------------
         referral_from = None
 
         if body.referral_code and body.referral_code != body.username:
@@ -54,35 +48,30 @@ async def register(body: RegisterRequest):
             for ref in ref_query:
                 referral_from = body.referral_code
 
-        # -------------------------------------------------
-        # CREATE USER DOCUMENT
-        # -------------------------------------------------
         user_data = {
             "username": body.username,
             "email": body.email,
             "full_name": body.full_name,
             "is_company": body.is_company,
 
-            "token_balance": 0,
+            "token_balance": 0.0,
             "status": "active",
 
             "created_at": datetime.now(timezone.utc),
 
-            # referral system
+            # referral
             "referral_code": body.username.lower(),
             "referred_by": referral_from,
-            "referral_earnings": 0,
+            "referral_earnings": 0.0,
 
             # stats
             "datasets_uploaded": 0,
-            "tokens_earned": 0
+            "tokens_earned": 0.0
         }
 
         db.collection("users").document(user_record.uid).set(user_data)
 
-        # -------------------------------------------------
-        # SIGNUP REFERRAL REWARD
-        # -------------------------------------------------
+        # Referral reward
         if referral_from:
 
             ref_query = (
@@ -111,10 +100,7 @@ async def register(body: RegisterRequest):
         return user_data
 
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
-        )
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 # -------------------------------------------------
@@ -136,10 +122,7 @@ async def login(body: LoginRequest):
         r = requests.post(url, json=payload)
 
         if r.status_code != 200:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid credentials"
-            )
+            raise HTTPException(status_code=401, detail="Invalid credentials")
 
         data = r.json()
 
@@ -149,10 +132,7 @@ async def login(body: LoginRequest):
         }
 
     except Exception:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid credentials"
-        )
+        raise HTTPException(status_code=401, detail="Invalid credentials")
 
 
 # -------------------------------------------------
@@ -166,18 +146,18 @@ async def get_current_user(
     doc = db.collection("users").document(user_id).get()
 
     if not doc.exists:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found"
-        )
+        raise HTTPException(status_code=404, detail="User not found")
 
     data = doc.to_dict()
 
     if data.get("status") == "deleted":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Account deleted"
-        )
+        raise HTTPException(status_code=403, detail="Account deleted")
+
+    # SAFE DEFAULTS (important for frontend wallet)
+    data.setdefault("token_balance", 0.0)
+    data.setdefault("referral_earnings", 0.0)
+    data.setdefault("datasets_uploaded", 0)
+    data.setdefault("tokens_earned", 0.0)
 
     data["id"] = user_id
 
@@ -188,9 +168,7 @@ async def get_current_user(
 # DELETE ACCOUNT
 # -------------------------------------------------
 @router.delete("/delete-account")
-async def delete_account(
-    user_id: str = Depends(get_current_user_id)
-):
+async def delete_account(user_id: str = Depends(get_current_user_id)):
 
     try:
 
@@ -222,10 +200,7 @@ async def delete_account(
         return {"message": "Account deleted successfully"}
 
     except Exception as e:
-        raise HTTPException(
-            status_code=400,
-            detail=str(e)
-        )
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 # -------------------------------------------------
@@ -251,10 +226,7 @@ async def forgot_password(email: str):
         }
 
     except Exception:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Email not registered"
-        )
+        raise HTTPException(status_code=404, detail="Email not registered")
 
 
 # -------------------------------------------------
@@ -266,23 +238,14 @@ async def reset_password(token: str, new_password: str):
     doc = db.collection("password_resets").document(token).get()
 
     if not doc.exists:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid reset token"
-        )
+        raise HTTPException(status_code=400, detail="Invalid reset token")
 
     data = doc.to_dict()
 
     if data["expiry"] < datetime.now(timezone.utc):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Reset token expired"
-        )
+        raise HTTPException(status_code=400, detail="Reset token expired")
 
-    auth.update_user(
-        data["user_id"],
-        password=new_password
-    )
+    auth.update_user(data["user_id"], password=new_password)
 
     db.collection("password_resets").document(token).delete()
 
