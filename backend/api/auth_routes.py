@@ -19,6 +19,8 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 FIREBASE_API_KEY = os.getenv("FIREBASE_API_KEY")
 
+REFERRAL_REWARD = 2
+
 
 # -------------------------------------------------
 # REGISTER USER
@@ -35,6 +37,7 @@ async def register(body: RegisterRequest):
         )
 
         referral_from = None
+        referrer_doc = None
 
         if body.referral_code and body.referral_code != body.username:
 
@@ -47,6 +50,7 @@ async def register(body: RegisterRequest):
 
             for ref in ref_query:
                 referral_from = body.referral_code
+                referrer_doc = ref
 
         user_data = {
             "username": body.username,
@@ -71,26 +75,31 @@ async def register(body: RegisterRequest):
 
         db.collection("users").document(user_record.uid).set(user_data)
 
-        # Referral reward
-        if referral_from:
+        # -------------------------------------------------
+        # REFERRAL REWARD FROM TREASURY
+        # -------------------------------------------------
+        if referral_from and referrer_doc:
 
-            ref_query = (
-                db.collection("users")
-                .where("referral_code", "==", referral_from)
-                .limit(1)
-                .stream()
-            )
+            treasury_ref = db.collection("treasury").document("platform_wallet")
+            treasury = treasury_ref.get().to_dict()
 
-            for ref in ref_query:
+            if treasury and treasury.get("wallet_balance", 0) >= REFERRAL_REWARD:
 
-                ref.reference.update({
-                    "token_balance": firestore.Increment(1),
-                    "referral_earnings": firestore.Increment(1)
+                # deduct treasury
+                treasury_ref.update({
+                    "wallet_balance": firestore.Increment(-REFERRAL_REWARD)
                 })
 
+                # reward referrer
+                referrer_doc.reference.update({
+                    "token_balance": firestore.Increment(REFERRAL_REWARD),
+                    "referral_earnings": firestore.Increment(REFERRAL_REWARD)
+                })
+
+                # transaction log
                 db.collection("transactions").add({
-                    "user_id": ref.id,
-                    "amount": 1,
+                    "user_id": referrer_doc.id,
+                    "amount": REFERRAL_REWARD,
                     "type": "referral_signup_reward",
                     "created_at": datetime.now(timezone.utc)
                 })
@@ -153,7 +162,6 @@ async def get_current_user(
     if data.get("status") == "deleted":
         raise HTTPException(status_code=403, detail="Account deleted")
 
-    # SAFE DEFAULTS (important for frontend wallet)
     data.setdefault("token_balance", 0.0)
     data.setdefault("referral_earnings", 0.0)
     data.setdefault("datasets_uploaded", 0)

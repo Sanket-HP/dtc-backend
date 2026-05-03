@@ -159,7 +159,6 @@ async def upload_dataset(
     record_count = len(rows)
 
     ai_score = compute_ai_score(rows)
-
     quality_score = compute_quality_score(rows)
 
     dataset_value = compute_dataset_value(
@@ -174,7 +173,6 @@ async def upload_dataset(
     token_reward = compute_token_reward(record_count, dataset_value)
 
     price = calculate_dataset_price(dataset_value, record_count)
-
     trust_score = calculate_trust_score(quality_score, ai_score, dataset_value)
 
     dataset_id = str(uuid.uuid4())
@@ -185,7 +183,6 @@ async def upload_dataset(
     file_url = blob.public_url
 
     dataset_data = {
-
         "id": dataset_id,
         "title": title,
         "description": description,
@@ -216,9 +213,10 @@ async def upload_dataset(
         "datasets_uploaded": firestore.Increment(1)
     })
 
-    # update circulating supply
+    # update token economy
     db.collection("token_stats").document("token_stats").update({
-        "circulating_supply": firestore.Increment(token_reward)
+        "circulating_supply": firestore.Increment(token_reward),
+        "dataset_rewards_pool": firestore.Increment(-token_reward)
     })
 
     db.collection("transactions").add({
@@ -239,31 +237,10 @@ async def upload_dataset(
 
 
 # -------------------------------------------------
-# LIST DATASETS
-# -------------------------------------------------
-@router.get("/")
-async def list_datasets():
-
-    docs = db.collection("datasets").limit(100).stream()
-
-    results = []
-
-    for d in docs:
-        data = d.to_dict()
-        data["id"] = d.id
-        results.append(data)
-
-    return results
-
-
-# -------------------------------------------------
 # DELETE DATASET
 # -------------------------------------------------
 @router.delete("/{dataset_id}")
-async def delete_dataset(
-    dataset_id: str,
-    user_id: str = Depends(get_current_user_id)
-):
+async def delete_dataset(dataset_id: str, user_id: str = Depends(get_current_user_id)):
 
     doc_ref = db.collection("datasets").document(dataset_id)
     doc = doc_ref.get()
@@ -287,9 +264,9 @@ async def delete_dataset(
         "datasets_uploaded": firestore.Increment(-1)
     })
 
-    # reduce circulating supply
     db.collection("token_stats").document("token_stats").update({
-        "circulating_supply": firestore.Increment(-token_reward)
+        "circulating_supply": firestore.Increment(-token_reward),
+        "dataset_rewards_pool": firestore.Increment(token_reward)
     })
 
     db.collection("transactions").add({
@@ -299,16 +276,6 @@ async def delete_dataset(
         "type": "dataset_delete_penalty",
         "created_at": datetime.now(timezone.utc)
     })
-
-    file_url = dataset.get("file_url")
-
-    if file_url:
-        try:
-            filename = file_url.split("/")[-1].split("?")[0]
-            blob = bucket.blob(f"datasets/{dataset_id}/{filename}")
-            blob.delete()
-        except Exception:
-            pass
 
     doc_ref.delete()
 

@@ -24,14 +24,15 @@ except Exception:
 from .api.auth_routes import router as auth_router
 from .api.dataset_routes import router as dataset_router
 from .api.marketplace_routes import router as marketplace_router
-
+from .api.economy_routes import router as economy_router
 from .api.users import router as users_router
 from .api.leaderboard import router as leaderboard_router
 from .api.requests import router as requests_router
 from .api.recommendations import router as recommendations_router
 
-# NEW TOKEN ROUTER
+# Token + Treasury routers
 from .api.token_routes import router as token_router
+from .api.treasury_routes import router as treasury_router
 
 
 # -------------------------------------------------
@@ -66,7 +67,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="DataTrust Coin (DTC)",
     description="Secure dataset marketplace powered by token rewards.",
-    version="1.3.0",
+    version="1.4.0",
     lifespan=lifespan,
 )
 
@@ -158,14 +159,15 @@ async def rate_limit(request: Request, call_next):
 app.include_router(auth_router, prefix="/api")
 app.include_router(dataset_router, prefix="/api")
 app.include_router(marketplace_router, prefix="/api")
-
+app.include_router(economy_router, prefix="/api")
 app.include_router(users_router, prefix="/api")
 app.include_router(leaderboard_router, prefix="/api")
 app.include_router(requests_router, prefix="/api")
 app.include_router(recommendations_router, prefix="/api")
 
-# NEW TOKEN ROUTES
+# Token economy routes
 app.include_router(token_router, prefix="/api")
+app.include_router(treasury_router, prefix="/api")
 
 
 # -------------------------------------------------
@@ -176,7 +178,7 @@ async def root():
     return {
         "service": "DataTrust Coin API",
         "status": "running",
-        "version": "1.3.0",
+        "version": "1.4.0",
         "docs": "/docs"
     }
 
