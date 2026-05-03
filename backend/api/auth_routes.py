@@ -1,16 +1,23 @@
 """Authentication routes – Firebase version."""
 
 import secrets
+import requests
 from datetime import datetime, timedelta, timezone
+import os
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, status, Depends
 
 from firebase_admin import auth
 from ..firebase_config import db
 
 from .schemas import RegisterRequest, LoginRequest, TokenResponse, UserResponse
+from .deps import get_current_user_id
+
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+# Firebase Web API key
+FIREBASE_API_KEY = os.getenv("FIREBASE_API_KEY")
 
 
 # -------------------------------------------------
@@ -20,25 +27,13 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 async def register(body: RegisterRequest):
 
     try:
-        # create Firebase Auth user
         user_record = auth.create_user(
             email=body.email,
             password=body.password,
             display_name=body.username
         )
 
-        # save additional data in Firestore
-        db.collection("users").document(user_record.uid).set({
-            "username": body.username,
-            "email": body.email,
-            "full_name": body.full_name,
-            "is_company": body.is_company,
-            "token_balance": 0,
-            "created_at": datetime.now(timezone.utc)
-        })
-
-        return {
-            "id": user_record.uid,
+        user_data = {
             "username": body.username,
             "email": body.email,
             "full_name": body.full_name,
@@ -46,6 +41,12 @@ async def register(body: RegisterRequest):
             "token_balance": 0,
             "created_at": datetime.now(timezone.utc)
         }
+
+        db.collection("users").document(user_record.uid).set(user_data)
+
+        user_data["id"] = user_record.uid
+
+        return user_data
 
     except Exception as e:
         raise HTTPException(
@@ -61,14 +62,27 @@ async def register(body: RegisterRequest):
 async def login(body: LoginRequest):
 
     try:
-        user = auth.get_user_by_email(body.username)
 
-        # Firebase does not verify password here
-        # frontend must authenticate and send token
-        custom_token = auth.create_custom_token(user.uid)
+        url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={FIREBASE_API_KEY}"
+
+        payload = {
+            "email": body.email,
+            "password": body.password,
+            "returnSecureToken": True
+        }
+
+        r = requests.post(url, json=payload)
+
+        if r.status_code != 200:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid credentials"
+            )
+
+        data = r.json()
 
         return {
-            "access_token": custom_token.decode(),
+            "access_token": data["idToken"],
             "token_type": "bearer"
         }
 
@@ -80,10 +94,12 @@ async def login(body: LoginRequest):
 
 
 # -------------------------------------------------
-# CURRENT USER
+# CURRENT USER (FIXED)
 # -------------------------------------------------
 @router.get("/me", response_model=UserResponse)
-async def get_current_user(user_id: str):
+async def get_current_user(
+    user_id: str = Depends(get_current_user_id)
+):
 
     doc = db.collection("users").document(user_id).get()
 

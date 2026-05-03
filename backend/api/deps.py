@@ -4,23 +4,35 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from firebase_admin import auth
+from google.cloud.exceptions import NotFound
 
 from ..firebase_config import db
 
 
-_bearer = HTTPBearer()
+# ---------------------------------------------------------
+# HTTP Bearer Token Extractor
+# ---------------------------------------------------------
+security = HTTPBearer()
 
 
-# ─────────────────────────────────────────────
-# Return full user object from Firestore
-# ─────────────────────────────────────────────
+# ---------------------------------------------------------
+# Get current authenticated user
+# ---------------------------------------------------------
 async def get_current_user(
-    creds: HTTPAuthorizationCredentials = Depends(_bearer)
+    credentials: HTTPAuthorizationCredentials = Depends(security)
 ):
 
+    if not credentials:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authorization token missing"
+        )
+
+    token = credentials.credentials
+
     try:
-        # Verify Firebase token
-        decoded_token = auth.verify_id_token(creds.credentials)
+        # Verify Firebase ID token
+        decoded_token = auth.verify_id_token(token)
 
         user_id = decoded_token.get("uid")
 
@@ -44,16 +56,28 @@ async def get_current_user(
 
         return user_data
 
-    except Exception:
+    except auth.InvalidIdTokenError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token"
+            detail="Invalid authentication token"
+        )
+
+    except auth.ExpiredIdTokenError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication token expired"
+        )
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Authentication failed: {str(e)}"
         )
 
 
-# ─────────────────────────────────────────────
-# Return only user id
-# ─────────────────────────────────────────────
+# ---------------------------------------------------------
+# Return only user ID
+# ---------------------------------------------------------
 async def get_current_user_id(
     user: dict = Depends(get_current_user)
 ) -> str:
