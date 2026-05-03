@@ -9,6 +9,7 @@ Provides:
 """
 
 from ..firebase_config import db
+from google.cloud import firestore
 
 
 # -------------------------------------------------
@@ -24,7 +25,7 @@ def search_datasets(query: str, limit: int = 25):
 
     for d in docs:
 
-        data = d.to_dict()
+        data = d.to_dict() or {}
 
         title = str(data.get("title", "")).lower()
         description = str(data.get("description", "")).lower()
@@ -33,14 +34,16 @@ def search_datasets(query: str, limit: int = 25):
         quality = float(data.get("quality_score", 0))
         trust = float(data.get("trust_score", 0))
         ai_score = float(data.get("ai_training_score", 0))
-        downloads = int(data.get("download_count", 0))
+        downloads = int(data.get("downloads", 0))
         dataset_value = float(data.get("dataset_value", 0))
+        rating = float(data.get("rating", 0))
+        price = float(data.get("price", 0))
 
         score = 0
 
-        # title match (highest weight)
+        # title match (highest relevance)
         if query in title:
-            score += 5
+            score += 6
 
         # description match
         if query in description:
@@ -54,11 +57,12 @@ def search_datasets(query: str, limit: int = 25):
 
             ranking_score = (
                 score +
-                (quality * 2) +
-                (trust * 1.5) +
+                (quality * 2.5) +
+                (trust * 1.8) +
                 (ai_score * 2) +
+                (rating * 1.5) +
                 (downloads * 0.02) +
-                (dataset_value * 0.5)
+                (dataset_value * 0.6)
             )
 
             ranked_results.append({
@@ -72,8 +76,9 @@ def search_datasets(query: str, limit: int = 25):
                 "trust_score": trust,
                 "ai_training_score": ai_score,
                 "dataset_value": dataset_value,
-                "download_count": downloads,
-                "rating": data.get("rating", 0)
+                "downloads": downloads,
+                "rating": rating,
+                "price": price
             })
 
     ranked_results.sort(key=lambda x: x["ranking"], reverse=True)
@@ -97,7 +102,7 @@ def filter_by_category(category: str, limit: int = 50):
 
     for d in docs:
 
-        data = d.to_dict()
+        data = d.to_dict() or {}
 
         results.append({
             "id": d.id,
@@ -107,8 +112,10 @@ def filter_by_category(category: str, limit: int = 50):
             "quality_score": data.get("quality_score", 0),
             "trust_score": data.get("trust_score", 0),
             "ai_training_score": data.get("ai_training_score", 0),
-            "download_count": data.get("download_count", 0),
-            "dataset_value": data.get("dataset_value", 0)
+            "downloads": data.get("downloads", 0),
+            "dataset_value": data.get("dataset_value", 0),
+            "price": data.get("price", 0),
+            "rating": data.get("rating", 0)
         })
 
     return results
@@ -121,7 +128,7 @@ def trending_datasets(limit: int = 10):
 
     docs = (
         db.collection("datasets")
-        .order_by("download_count", direction="DESCENDING")
+        .order_by("downloads", direction=firestore.Query.DESCENDING)
         .limit(limit)
         .stream()
     )
@@ -130,16 +137,17 @@ def trending_datasets(limit: int = 10):
 
     for d in docs:
 
-        data = d.to_dict()
+        data = d.to_dict() or {}
 
         results.append({
             "id": d.id,
             "title": data.get("title"),
             "category": data.get("category"),
-            "download_count": data.get("download_count", 0),
+            "downloads": data.get("downloads", 0),
             "trust_score": data.get("trust_score", 0),
             "quality_score": data.get("quality_score", 0),
-            "ai_training_score": data.get("ai_training_score", 0)
+            "ai_training_score": data.get("ai_training_score", 0),
+            "price": data.get("price", 0)
         })
 
     return results
@@ -152,7 +160,7 @@ def best_quality_datasets(limit: int = 10):
 
     docs = (
         db.collection("datasets")
-        .order_by("quality_score", direction="DESCENDING")
+        .order_by("quality_score", direction=firestore.Query.DESCENDING)
         .limit(limit)
         .stream()
     )
@@ -161,7 +169,7 @@ def best_quality_datasets(limit: int = 10):
 
     for d in docs:
 
-        data = d.to_dict()
+        data = d.to_dict() or {}
 
         results.append({
             "id": d.id,
@@ -170,7 +178,8 @@ def best_quality_datasets(limit: int = 10):
             "quality_score": data.get("quality_score", 0),
             "trust_score": data.get("trust_score", 0),
             "ai_training_score": data.get("ai_training_score", 0),
-            "record_count": data.get("record_count", 0)
+            "record_count": data.get("record_count", 0),
+            "price": data.get("price", 0)
         })
 
     return results
@@ -183,7 +192,7 @@ def most_trusted_datasets(limit: int = 10):
 
     docs = (
         db.collection("datasets")
-        .order_by("trust_score", direction="DESCENDING")
+        .order_by("trust_score", direction=firestore.Query.DESCENDING)
         .limit(limit)
         .stream()
     )
@@ -192,7 +201,7 @@ def most_trusted_datasets(limit: int = 10):
 
     for d in docs:
 
-        data = d.to_dict()
+        data = d.to_dict() or {}
 
         results.append({
             "id": d.id,
@@ -201,7 +210,8 @@ def most_trusted_datasets(limit: int = 10):
             "trust_score": data.get("trust_score", 0),
             "quality_score": data.get("quality_score", 0),
             "ai_training_score": data.get("ai_training_score", 0),
-            "download_count": data.get("download_count", 0)
+            "downloads": data.get("downloads", 0),
+            "price": data.get("price", 0)
         })
 
     return results

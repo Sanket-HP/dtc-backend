@@ -18,10 +18,14 @@ from ..utils.parser import parse_file
 
 from ..firebase_config import bucket
 
+from ..services.dataset_ai_score import compute_ai_score
+from ..services.data_valuation import compute_dataset_value
+from ..services.anti_spam import is_spam_dataset
 
-# ─────────────────────────────────────────────
+
+# -------------------------------------------------
 # Upload dataset to Firebase Storage
-# ─────────────────────────────────────────────
+# -------------------------------------------------
 def upload_to_storage(file_bytes: bytes, filename: str) -> str:
     blob = bucket.blob(f"datasets/{filename}")
     blob.upload_from_string(file_bytes)
@@ -29,17 +33,22 @@ def upload_to_storage(file_bytes: bytes, filename: str) -> str:
     return blob.public_url
 
 
-# ─────────────────────────────────────────────
-# Generate dataset hash (detect duplicates)
-# ─────────────────────────────────────────────
+# -------------------------------------------------
+# Generate dataset fingerprint hash
+# -------------------------------------------------
 def generate_dataset_hash(records: list[dict]) -> str:
-    sample = json.dumps(records[:100], sort_keys=True)
-    return hashlib.sha256(sample.encode()).hexdigest()
+
+    normalized = json.dumps(
+        sorted(records[:200], key=lambda x: json.dumps(x, sort_keys=True)),
+        sort_keys=True
+    )
+
+    return hashlib.sha256(normalized.encode()).hexdigest()
 
 
-# ─────────────────────────────────────────────
+# -------------------------------------------------
 # Calculate dataset quality score
-# ─────────────────────────────────────────────
+# -------------------------------------------------
 def calculate_quality_score(records: list[dict]) -> float:
 
     total = len(records)
@@ -47,17 +56,17 @@ def calculate_quality_score(records: list[dict]) -> float:
     if total == 0:
         return 0.0
 
-    # duplicate detection
     unique_records = {json.dumps(r, sort_keys=True) for r in records}
     duplicate_ratio = 1 - (len(unique_records) / total)
 
-    # missing values
     missing = 0
     total_fields = 0
 
     for r in records:
         for v in r.values():
+
             total_fields += 1
+
             if v in ("", None):
                 missing += 1
 
@@ -65,12 +74,12 @@ def calculate_quality_score(records: list[dict]) -> float:
 
     quality = (1 - duplicate_ratio) * (1 - missing_ratio)
 
-    return round(quality, 2)
+    return round(quality, 3)
 
 
-# ─────────────────────────────────────────────
+# -------------------------------------------------
 # Process uploaded dataset
-# ─────────────────────────────────────────────
+# -------------------------------------------------
 async def process_and_store(
     db: AsyncSession,
     owner_id: str,
@@ -88,9 +97,13 @@ async def process_and_store(
 
     cleaned, removed_fields = anonymize_records(records)
 
+    # spam detection
+    if is_spam_dataset(cleaned):
+        raise ValueError("Dataset rejected: spam or synthetic dataset detected.")
+
     dataset_hash = generate_dataset_hash(cleaned)
 
-    # check duplicate dataset
+    # duplicate dataset protection
     stmt = select(Dataset).where(Dataset.dataset_hash == dataset_hash)
     result = await db.execute(stmt)
     existing = result.scalar_one_or_none()
@@ -111,17 +124,28 @@ async def process_and_store(
 
     record_count = len(cleaned)
 
-    # dataset quality
+    # quality scoring
     quality_score = calculate_quality_score(cleaned)
 
-    # reward calculation
-    reward = round(record_count * TOKENS_PER_RECORD * quality_score, 2)
+    # AI usefulness scoring
+    ai_score = compute_ai_score(cleaned)
+
+    # dataset valuation
+    dataset_value = compute_dataset_value(
+        record_count,
+        quality_score,
+        ai_score,
+        category
+    )
+
+    # token reward
+    reward = round(record_count * TOKENS_PER_RECORD * dataset_value, 2)
 
     # dataset price
     price = round(reward * 2, 2)
 
     # trust score
-    trust_score = round(quality_score * 0.8, 2)
+    trust_score = round((quality_score + ai_score) / 2, 3)
 
     ds = Dataset(
         id=dataset_id,
@@ -139,16 +163,17 @@ async def process_and_store(
         dataset_hash=dataset_hash,
 
         quality_score=quality_score,
+        ai_training_score=ai_score,
+        dataset_value=dataset_value,
         trust_score=trust_score,
 
-        download_count=0,
+        downloads=0,
         purchase_count=0,
 
         token_reward=reward,
         price=price,
 
         version=1,
-
         status="processed",
     )
 
@@ -157,7 +182,12 @@ async def process_and_store(
     user = await db.get(User, owner_id)
 
     if user:
+
         user.token_balance = (user.token_balance or 0) + reward
+
+        user.tokens_earned = (user.tokens_earned or 0) + reward
+
+        user.datasets_uploaded = (user.datasets_uploaded or 0) + 1
 
     await db.commit()
     await db.refresh(ds)
@@ -165,9 +195,9 @@ async def process_and_store(
     return ds
 
 
-# ─────────────────────────────────────────────
+# -------------------------------------------------
 # Manual dataset entry
-# ─────────────────────────────────────────────
+# -------------------------------------------------
 async def process_manual_input(
     db: AsyncSession,
     owner_id: str,
@@ -182,6 +212,9 @@ async def process_manual_input(
 
     cleaned, _ = anonymize_records(records)
 
+    if is_spam_dataset(cleaned):
+        raise ValueError("Dataset rejected: spam dataset.")
+
     dataset_hash = generate_dataset_hash(cleaned)
 
     dataset_id = str(uuid.uuid4())
@@ -193,18 +226,25 @@ async def process_manual_input(
     file_url = upload_to_storage(file_bytes, stored_filename)
 
     fields = sorted({k for rec in cleaned for k in rec.keys()})
-
     sample = cleaned[:5]
 
     record_count = len(cleaned)
 
     quality_score = calculate_quality_score(cleaned)
+    ai_score = compute_ai_score(cleaned)
 
-    reward = round(record_count * TOKENS_PER_RECORD * quality_score, 2)
+    dataset_value = compute_dataset_value(
+        record_count,
+        quality_score,
+        ai_score,
+        category
+    )
+
+    reward = round(record_count * TOKENS_PER_RECORD * dataset_value, 2)
 
     price = round(reward * 2, 2)
 
-    trust_score = round(quality_score * 0.8, 2)
+    trust_score = round((quality_score + ai_score) / 2, 3)
 
     ds = Dataset(
         id=dataset_id,
@@ -222,16 +262,17 @@ async def process_manual_input(
         dataset_hash=dataset_hash,
 
         quality_score=quality_score,
+        ai_training_score=ai_score,
+        dataset_value=dataset_value,
         trust_score=trust_score,
 
-        download_count=0,
+        downloads=0,
         purchase_count=0,
 
         token_reward=reward,
         price=price,
 
         version=1,
-
         status="processed",
     )
 
@@ -240,7 +281,10 @@ async def process_manual_input(
     user = await db.get(User, owner_id)
 
     if user:
+
         user.token_balance = (user.token_balance or 0) + reward
+        user.tokens_earned = (user.tokens_earned or 0) + reward
+        user.datasets_uploaded = (user.datasets_uploaded or 0) + 1
 
     await db.commit()
     await db.refresh(ds)
@@ -248,9 +292,9 @@ async def process_manual_input(
     return ds
 
 
-# ─────────────────────────────────────────────
+# -------------------------------------------------
 # User dataset statistics
-# ─────────────────────────────────────────────
+# -------------------------------------------------
 async def get_dataset_stats(db: AsyncSession, owner_id: str) -> dict:
 
     stmt = select(

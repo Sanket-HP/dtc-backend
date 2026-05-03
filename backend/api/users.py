@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from datetime import datetime, timezone
+from google.cloud import firestore
 
 from ..firebase_config import db
 from .deps import get_current_user_id
@@ -22,7 +23,6 @@ async def get_my_profile(user_id: str = Depends(get_current_user_id)):
 
     data = doc.to_dict() or {}
 
-    # prevent deleted users
     if data.get("status") == "deleted":
         raise HTTPException(403, "Account deleted")
 
@@ -51,17 +51,24 @@ async def get_wallet(user_id: str = Depends(get_current_user_id)):
     )
 
     total_earned = 0
+    total_spent = 0
 
     for t in transactions:
+
         data = t.to_dict() or {}
 
-        if data.get("amount", 0) > 0:
-            total_earned += data.get("amount", 0)
+        amount = data.get("amount", 0)
+
+        if amount > 0:
+            total_earned += amount
+        else:
+            total_spent += abs(amount)
 
     return {
         "user_id": user_id,
         "token_balance": user.get("token_balance", 0),
         "total_earned": round(total_earned, 2),
+        "total_spent": round(total_spent, 2),
         "updated_at": user.get("updated_at", datetime.now(timezone.utc))
     }
 
@@ -99,9 +106,12 @@ async def get_user_datasets(
 
             "ai_training_score": data.get("ai_training_score", 0),
             "dataset_value": data.get("dataset_value", 0),
-            "token_reward": data.get("token_reward", 0),
 
-            "download_count": data.get("download_count", 0),
+            "token_reward": data.get("token_reward", 0),
+            "price": data.get("price", 0),
+
+            "downloads": data.get("downloads", 0),
+            "rating": data.get("rating", 0),
 
             "created_at": data.get("created_at")
         })
@@ -118,7 +128,7 @@ async def get_transactions(user_id: str = Depends(get_current_user_id)):
     docs = (
         db.collection("transactions")
         .where("user_id", "==", user_id)
-        .order_by("created_at", direction="DESCENDING")
+        .order_by("created_at", direction=firestore.Query.DESCENDING)
         .limit(50)
         .stream()
     )
@@ -163,7 +173,8 @@ async def get_reputation(user_id: str = Depends(get_current_user_id)):
 
         total_quality += data.get("quality_score", 0)
         total_ai_score += data.get("ai_training_score", 0)
-        downloads += data.get("download_count", 0)
+        downloads += data.get("downloads", 0)
+
         dataset_count += 1
 
     reputation = 0
@@ -223,7 +234,7 @@ async def user_analytics(user_id: str = Depends(get_current_user_id)):
 
         dataset_count += 1
         total_records += data.get("record_count", 0)
-        total_downloads += data.get("download_count", 0)
+        total_downloads += data.get("downloads", 0)
         total_value += data.get("dataset_value", 0)
 
     return {

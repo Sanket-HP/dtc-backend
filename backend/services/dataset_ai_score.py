@@ -10,6 +10,7 @@ Scoring considers:
 - entropy (data randomness)
 - dataset size
 - feature richness
+- column balance
 """
 
 import math
@@ -24,8 +25,7 @@ def feature_diversity(rows):
     if not rows:
         return 0
 
-    columns = rows[0].keys()
-
+    columns = list(rows[0].keys())
     diversity_score = 0
 
     for col in columns:
@@ -36,9 +36,8 @@ def feature_diversity(rows):
 
         diversity_score += unique
 
-    avg_diversity = diversity_score / len(columns)
+    avg_diversity = diversity_score / max(len(columns), 1)
 
-    # normalize
     return min(avg_diversity / 50, 1)
 
 
@@ -50,8 +49,7 @@ def numeric_feature_ratio(rows):
     if not rows:
         return 0
 
-    columns = rows[0].keys()
-
+    columns = list(rows[0].keys())
     numeric_columns = 0
 
     for col in columns:
@@ -62,13 +60,16 @@ def numeric_feature_ratio(rows):
 
             value = r.get(col)
 
-            if isinstance(value, (int, float)):
+            try:
+                float(value)
                 numeric_count += 1
+            except (TypeError, ValueError):
+                pass
 
         if numeric_count > len(rows) * 0.5:
             numeric_columns += 1
 
-    return numeric_columns / len(columns)
+    return numeric_columns / max(len(columns), 1)
 
 
 # -------------------------------------------------
@@ -79,8 +80,7 @@ def text_feature_ratio(rows):
     if not rows:
         return 0
 
-    columns = rows[0].keys()
-
+    columns = list(rows[0].keys())
     text_columns = 0
 
     for col in columns:
@@ -91,13 +91,13 @@ def text_feature_ratio(rows):
 
             value = r.get(col)
 
-            if isinstance(value, str):
+            if isinstance(value, str) and len(value.strip()) > 3:
                 text_count += 1
 
         if text_count > len(rows) * 0.5:
             text_columns += 1
 
-    return text_columns / len(columns)
+    return text_columns / max(len(columns), 1)
 
 
 # -------------------------------------------------
@@ -108,7 +108,7 @@ def detect_label_column(rows):
     if not rows:
         return False
 
-    columns = rows[0].keys()
+    columns = list(rows[0].keys())
 
     for col in columns:
 
@@ -116,7 +116,8 @@ def detect_label_column(rows):
 
         unique = len(set(values))
 
-        if 2 <= unique <= 20:
+        # classification label detection
+        if 2 <= unique <= max(20, len(rows) * 0.05):
             return True
 
     return False
@@ -130,7 +131,8 @@ def entropy_score(rows):
     values = []
 
     for r in rows:
-        values.extend(list(r.values()))
+        for v in r.values():
+            values.append(str(v))
 
     if not values:
         return 0
@@ -138,7 +140,6 @@ def entropy_score(rows):
     counter = Counter(values)
 
     entropy = 0
-
     total = len(values)
 
     for c in counter.values():
@@ -147,7 +148,6 @@ def entropy_score(rows):
 
         entropy -= p * math.log2(p)
 
-    # normalize
     return min(entropy / 6, 1)
 
 
@@ -193,6 +193,30 @@ def feature_richness(rows):
 
 
 # -------------------------------------------------
+# COLUMN BALANCE
+# -------------------------------------------------
+def column_balance(rows):
+
+    if not rows:
+        return 0
+
+    columns = list(rows[0].keys())
+
+    missing_total = 0
+    total_cells = len(rows) * len(columns)
+
+    for r in rows:
+        for v in r.values():
+
+            if v in ("", None):
+                missing_total += 1
+
+    missing_ratio = missing_total / max(total_cells, 1)
+
+    return max(1 - missing_ratio, 0)
+
+
+# -------------------------------------------------
 # MAIN AI TRAINING SCORE
 # -------------------------------------------------
 def compute_ai_score(rows):
@@ -214,16 +238,19 @@ def compute_ai_score(rows):
 
     richness = feature_richness(rows)
 
+    balance = column_balance(rows)
+
     label_score = 1 if label_present else 0.3
 
     ai_score = (
-        diversity * 0.20 +
+        diversity * 0.18 +
         numeric_ratio * 0.15 +
         text_ratio * 0.10 +
         label_score * 0.20 +
         entropy * 0.15 +
         size * 0.10 +
-        richness * 0.10
+        richness * 0.07 +
+        balance * 0.05
     )
 
-    return round(min(ai_score, 1), 2)
+    return round(min(ai_score, 1.0), 3)

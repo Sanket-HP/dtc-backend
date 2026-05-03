@@ -2,7 +2,6 @@
 
 import json
 import math
-import random
 from collections import Counter
 
 
@@ -14,7 +13,10 @@ def normalize_value(v):
     if v is None:
         return "NULL"
 
-    return str(v).strip()
+    try:
+        return str(v).strip().lower()
+    except Exception:
+        return "UNKNOWN"
 
 
 # -------------------------------------------------
@@ -25,15 +27,15 @@ def detect_low_entropy(rows):
     values = []
 
     for r in rows:
-        values.extend([normalize_value(v) for v in r.values()])
+        for v in r.values():
+            values.append(normalize_value(v))
 
-    if len(values) == 0:
+    if not values:
         return True
 
     counter = Counter(values)
 
     entropy = 0
-
     total = len(values)
 
     for c in counter.values():
@@ -43,12 +45,12 @@ def detect_low_entropy(rows):
         if p > 0:
             entropy -= p * math.log2(p)
 
-    # repetitive values → low entropy
-    return entropy < 1.0
+    # repetitive datasets have extremely low entropy
+    return entropy < 0.8
 
 
 # -------------------------------------------------
-# TOO MANY DUPLICATES
+# DUPLICATE ROW DETECTION
 # -------------------------------------------------
 def detect_duplicate_rows(rows):
 
@@ -61,7 +63,7 @@ def detect_duplicate_rows(rows):
 
     duplicate_ratio = 1 - (unique_rows / len(rows))
 
-    return duplicate_ratio > 0.7
+    return duplicate_ratio > 0.65
 
 
 # -------------------------------------------------
@@ -83,7 +85,7 @@ def detect_constant_columns(rows):
         if len(values) <= 1:
             constant_columns += 1
 
-    return constant_columns >= len(columns) * 0.6
+    return constant_columns >= len(columns) * 0.5
 
 
 # -------------------------------------------------
@@ -91,7 +93,7 @@ def detect_constant_columns(rows):
 # -------------------------------------------------
 def detect_too_small(rows):
 
-    return len(rows) < 10
+    return len(rows) < 20
 
 
 # -------------------------------------------------
@@ -112,7 +114,7 @@ def detect_low_column_diversity(rows):
 
         diversity_score += len(values)
 
-    avg_diversity = diversity_score / len(columns)
+    avg_diversity = diversity_score / max(len(columns), 1)
 
     return avg_diversity < 2
 
@@ -133,7 +135,7 @@ def detect_synthetic_patterns(rows):
 
     most_common = counter.most_common(1)
 
-    if most_common and most_common[0][1] > len(sample) * 0.5:
+    if most_common and most_common[0][1] > len(sample) * 0.45:
         return True
 
     return False
@@ -155,17 +157,15 @@ def detect_fake_numeric_patterns(rows):
             except Exception:
                 continue
 
-    if len(numeric_values) < 20:
+    if len(numeric_values) < 30:
         return False
 
     mean = sum(numeric_values) / len(numeric_values)
 
-    variance = sum(
-        (x - mean) ** 2
-        for x in numeric_values
-    ) / len(numeric_values)
+    variance = sum((x - mean) ** 2 for x in numeric_values) / len(numeric_values)
 
-    return variance < 0.0001
+    # extremely low variance suggests fake numeric pattern
+    return variance < 0.00001
 
 
 # -------------------------------------------------
@@ -178,17 +178,14 @@ def detect_row_similarity(rows):
 
     sample = rows[:100]
 
-    similarities = 0
+    identical_pairs = 0
 
-    for _ in range(20):
+    for i in range(len(sample) - 1):
 
-        a = random.choice(sample)
-        b = random.choice(sample)
+        if sample[i] == sample[i + 1]:
+            identical_pairs += 1
 
-        if a == b:
-            similarities += 1
-
-    return similarities > 10
+    return identical_pairs > len(sample) * 0.3
 
 
 # -------------------------------------------------

@@ -10,6 +10,7 @@ Calculates dataset market value based on:
 """
 
 from datetime import datetime, timezone
+import math
 from ..firebase_config import db
 
 
@@ -21,7 +22,7 @@ def category_rarity(category: str):
     docs = (
         db.collection("datasets")
         .where("category", "==", category)
-        .limit(200)  # performance protection
+        .limit(200)   # performance protection
         .stream()
     )
 
@@ -45,12 +46,16 @@ def category_rarity(category: str):
 # -------------------------------------------------
 def demand_score(downloads: int):
 
+    if downloads <= 0:
+        return 0.2
     if downloads < 5:
-        return 0.25
+        return 0.35
     if downloads < 20:
-        return 0.5
+        return 0.55
     if downloads < 100:
         return 0.8
+    if downloads < 500:
+        return 0.9
 
     return 1.0
 
@@ -60,12 +65,15 @@ def demand_score(downloads: int):
 # -------------------------------------------------
 def size_score(records: int):
 
-    if records < 100:
+    # logarithmic scaling to prevent farming
+    score = math.log(records + 1, 10)
+
+    if score < 1:
         return 0.25
-    if records < 1000:
-        return 0.55
-    if records < 10000:
-        return 0.8
+    if score < 2:
+        return 0.5
+    if score < 3:
+        return 0.75
 
     return 1.0
 
@@ -89,9 +97,11 @@ def freshness_score(created_at):
     if age_days < 7:
         return 1.0
     if age_days < 30:
-        return 0.85
+        return 0.9
+    if age_days < 90:
+        return 0.75
     if age_days < 180:
-        return 0.65
+        return 0.6
 
     return 0.45
 
@@ -122,10 +132,10 @@ def compute_dataset_value(
         freshness * 0.05
     )
 
-    # prevent value from becoming zero
+    # safety clamp
     dataset_value = max(dataset_value, 0.05)
 
-    return round(min(dataset_value, 1), 3)
+    return round(min(dataset_value, 1.0), 3)
 
 
 # -------------------------------------------------
@@ -136,8 +146,8 @@ def compute_token_reward(
     dataset_value: float
 ):
 
-    # base reward per record
-    base_tokens = record_count * 0.2
+    # base reward using logarithmic scaling
+    base_tokens = math.log(record_count + 1) * 10
 
     reward = base_tokens * dataset_value
 

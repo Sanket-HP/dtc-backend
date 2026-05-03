@@ -27,7 +27,7 @@ router = APIRouter(prefix="/datasets", tags=["datasets"])
 
 
 # -------------------------------------------------
-# DATASET HASH GENERATION
+# HASH FUNCTIONS
 # -------------------------------------------------
 def generate_dataset_hash(rows):
 
@@ -39,28 +39,8 @@ def generate_dataset_hash(rows):
     return hashlib.sha256(normalized.encode()).hexdigest()
 
 
-# -------------------------------------------------
-# FILE HASH
-# -------------------------------------------------
 def generate_file_hash(content: bytes):
     return hashlib.sha256(content).hexdigest()
-
-
-# -------------------------------------------------
-# DATASET SIMILARITY
-# -------------------------------------------------
-def dataset_similarity(rows1, rows2):
-
-    set1 = set(json.dumps(r, sort_keys=True) for r in rows1[:500])
-    set2 = set(json.dumps(r, sort_keys=True) for r in rows2[:500])
-
-    if not set1 or not set2:
-        return 0
-
-    intersection = len(set1.intersection(set2))
-    union = len(set1.union(set2))
-
-    return intersection / union
 
 
 # -------------------------------------------------
@@ -139,115 +119,124 @@ def analyze_dataset(rows):
 
 
 # -------------------------------------------------
-# UPLOAD DATASET
+# DATASET PRICE
 # -------------------------------------------------
-@router.post("/upload")
-async def upload_dataset(
-    file: UploadFile = File(...),
-    title: str = Form(...),
-    description: str = Form(""),
-    category: str = Form("general"),
-    user_id: str = Depends(get_current_user_id),
-):
+def calculate_dataset_price(dataset_value, rows):
 
-    content = await file.read()
+    base_price = dataset_value * 5
+    size_bonus = math.log(rows + 1)
 
-    if len(content) > 20 * 1024 * 1024:
-        raise HTTPException(400, "File too large (max 20MB)")
+    return round(base_price * size_bonus, 2)
 
-    file_hash = generate_file_hash(content)
 
-    # PARSE DATASET
-    if file.filename.endswith(".csv"):
+# -------------------------------------------------
+# LIST DATASETS
+# -------------------------------------------------
+@router.get("/")
+async def list_datasets():
 
-        text = content.decode("utf-8")
-        reader = csv.DictReader(io.StringIO(text))
-        rows = list(reader)
+    docs = db.collection("datasets").limit(100).stream()
 
-    elif file.filename.endswith(".json"):
+    results = []
 
-        rows = json.loads(content)
+    for d in docs:
+        data = d.to_dict()
+        data["id"] = d.id
+        results.append(data)
 
-    else:
-        raise HTTPException(400, "Only CSV or JSON allowed")
+    return results
 
-    if len(rows) < 20:
-        raise HTTPException(400, "Dataset too small")
 
-    rows = anonymize_dataset(rows)
+# -------------------------------------------------
+# DATASET PREVIEW
+# -------------------------------------------------
+@router.get("/{dataset_id}/preview")
+async def preview_dataset(dataset_id: str):
 
-    if is_spam_dataset(rows):
-        raise HTTPException(400, "Spam dataset detected")
+    doc = db.collection("datasets").document(dataset_id).get()
 
-    validation = validate_dataset(rows)
+    if not doc.exists:
+        raise HTTPException(404, "Dataset not found")
 
-    if not validation["valid"]:
-        raise HTTPException(400, f"Dataset rejected: {validation['issues']}")
+    data = doc.to_dict()
 
-    dataset_hash = generate_dataset_hash(rows)
-
-    existing = (
-        db.collection("datasets")
-        .where("dataset_hash", "==", dataset_hash)
-        .limit(1)
-        .get()
-    )
-
-    if existing:
-        raise HTTPException(400, "Dataset already exists")
-
-    quality_score = analyze_dataset(rows)
-    ai_score = compute_ai_score(rows)
-
-    record_count = len(rows)
-
-    dataset_value = compute_dataset_value(
-        record_count,
-        quality_score,
-        ai_score,
-        category
-    )
-
-    reward = compute_token_reward(record_count, dataset_value)
-
-    dataset_id = str(uuid.uuid4())
-
-    blob = bucket.blob(f"datasets/{dataset_id}_{file.filename}")
-    blob.upload_from_string(content)
-
-    dataset_data = {
+    return {
         "id": dataset_id,
-        "owner_id": user_id,
-        "title": title,
-        "description": description,
-        "category": category,
-        "record_count": record_count,
-        "quality_score": quality_score,
-        "ai_training_score": ai_score,
-        "dataset_value": dataset_value,
-        "token_reward": reward,
-        "file_hash": file_hash,
-        "dataset_hash": dataset_hash,
-        "file_url": blob.public_url,
-        "sample_records": rows[:20],
-        "created_at": datetime.now(timezone.utc)
+        "title": data.get("title"),
+        "category": data.get("category"),
+        "record_count": data.get("record_count"),
+        "quality_score": data.get("quality_score"),
+        "ai_training_score": data.get("ai_training_score"),
+        "dataset_value": data.get("dataset_value"),
+        "price": data.get("price"),
+        "downloads": data.get("downloads", 0),
+        "rating": data.get("rating", 0),
+        "sample_records": data.get("sample_records", [])
     }
 
-    db.collection("datasets").document(dataset_id).set(dataset_data)
 
-    db.collection("users").document(user_id).update({
-        "token_balance": firestore.Increment(reward)
+# -------------------------------------------------
+# DOWNLOAD DATASET
+# -------------------------------------------------
+@router.get("/{dataset_id}/download")
+async def download_dataset(dataset_id: str):
+
+    doc = db.collection("datasets").document(dataset_id).get()
+
+    if not doc.exists:
+        raise HTTPException(404, "Dataset not found")
+
+    data = doc.to_dict()
+
+    db.collection("datasets").document(dataset_id).update({
+        "downloads": firestore.Increment(1)
     })
 
-    db.collection("transactions").add({
-        "user_id": user_id,
+    return {
+        "file_url": data.get("file_url"),
+        "downloads": data.get("downloads", 0) + 1
+    }
+
+
+# -------------------------------------------------
+# RATE DATASET
+# -------------------------------------------------
+@router.post("/{dataset_id}/rate")
+async def rate_dataset(
+    dataset_id: str,
+    rating: int = Form(...),
+    user_id: str = Depends(get_current_user_id)
+):
+
+    if rating < 1 or rating > 5:
+        raise HTTPException(400, "Rating must be between 1 and 5")
+
+    dataset_ref = db.collection("datasets").document(dataset_id)
+    doc = dataset_ref.get()
+
+    if not doc.exists:
+        raise HTTPException(404, "Dataset not found")
+
+    data = doc.to_dict()
+
+    current_rating = data.get("rating", 0)
+    rating_count = data.get("rating_count", 0)
+
+    new_rating = (
+        (current_rating * rating_count + rating)
+        / (rating_count + 1)
+    )
+
+    dataset_ref.update({
+        "rating": round(new_rating, 2),
+        "rating_count": rating_count + 1
+    })
+
+    return {
         "dataset_id": dataset_id,
-        "amount": reward,
-        "type": "dataset_reward",
-        "created_at": datetime.now(timezone.utc)
-    })
-
-    return dataset_data
+        "new_rating": round(new_rating, 2),
+        "rating_count": rating_count + 1
+    }
 
 
 # -------------------------------------------------
@@ -272,7 +261,6 @@ async def delete_dataset(
 
     reward = dataset.get("token_reward", 0)
 
-    # Prevent deletion if dataset already purchased
     purchases = (
         db.collection("purchases")
         .where("dataset_id", "==", dataset_id)
@@ -286,15 +274,15 @@ async def delete_dataset(
             "Dataset cannot be deleted because it has been purchased"
         )
 
-    # Delete dataset
     dataset_ref.delete()
 
-    # Rollback reward tokens
+    db.collection("dataset_registry").document(dataset["dataset_hash"]).delete()
+
     db.collection("users").document(user_id).update({
-        "token_balance": firestore.Increment(-reward)
+        "token_balance": firestore.Increment(-reward),
+        "datasets_uploaded": firestore.Increment(-1)
     })
 
-    # Add transaction record
     db.collection("transactions").add({
         "user_id": user_id,
         "dataset_id": dataset_id,

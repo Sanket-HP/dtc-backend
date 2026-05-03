@@ -21,7 +21,6 @@ router = APIRouter(prefix="/marketplace", tags=["marketplace"])
 async def list_marketplace(
     category: str | None = Query(None),
     min_quality: float | None = Query(None),
-    min_trust: float | None = Query(None),
     limit: int = Query(50, ge=1, le=100),
 ):
 
@@ -40,15 +39,12 @@ async def list_marketplace(
         if min_quality and data.get("quality_score", 0) < min_quality:
             continue
 
-        if min_trust and data.get("trust_score", 0) < min_trust:
-            continue
-
         datasets.append(data)
 
     datasets.sort(
         key=lambda x: (
-            x.get("trust_score", 0),
-            x.get("download_count", 0)
+            x.get("downloads", 0),
+            x.get("quality_score", 0)
         ),
         reverse=True
     )
@@ -64,7 +60,7 @@ async def trending_datasets():
 
     docs = (
         db.collection("datasets")
-        .order_by("download_count", direction="DESCENDING")
+        .order_by("downloads", direction=firestore.Query.DESCENDING)
         .limit(10)
         .stream()
     )
@@ -97,7 +93,7 @@ async def featured_datasets():
         if data.get("quality_score", 0) >= 0.9:
             datasets.append(data)
 
-    datasets.sort(key=lambda x: x.get("trust_score", 0), reverse=True)
+    datasets.sort(key=lambda x: x.get("downloads", 0), reverse=True)
 
     return datasets[:10]
 
@@ -145,9 +141,9 @@ async def preview_dataset(dataset_id: str):
         "record_count": data.get("record_count"),
         "quality_score": data.get("quality_score"),
         "ai_training_score": data.get("ai_training_score"),
-        "trust_score": data.get("trust_score"),
         "dataset_value": data.get("dataset_value"),
-        "download_count": data.get("download_count", 0)
+        "price": data.get("price"),
+        "downloads": data.get("downloads", 0)
     }
 
 
@@ -197,8 +193,7 @@ async def purchase_dataset(
 
     buyer = buyer_doc.to_dict()
 
-    # Convert dataset_value score to price
-    price = max(round(dataset.get("dataset_value", 0.1) * 100, 2), 5)
+    price = dataset.get("price", 5)
 
     if buyer.get("token_balance", 0) < price:
         raise HTTPException(
@@ -206,22 +201,26 @@ async def purchase_dataset(
             "Insufficient token balance"
         )
 
-    # Atomic token deduction
+    # Royalty split
+    owner_share = round(price * 0.8, 2)
+    platform_fee = round(price * 0.2, 2)
+
+    owner_ref = db.collection("users").document(dataset["owner_id"])
+
+    # Deduct buyer tokens
     buyer_ref.update({
         "token_balance": firestore.Increment(-price)
     })
 
-    # Atomic owner reward
-    owner_ref = db.collection("users").document(dataset["owner_id"])
-
+    # Reward owner
     owner_ref.update({
-        "token_balance": firestore.Increment(price)
+        "token_balance": firestore.Increment(owner_share),
+        "tokens_earned": firestore.Increment(owner_share)
     })
 
     # Update dataset stats
     dataset_ref.update({
-        "download_count": dataset.get("download_count", 0) + 1,
-        "purchase_count": dataset.get("purchase_count", 0) + 1
+        "downloads": firestore.Increment(1)
     })
 
     purchase_ref = db.collection("purchases").document()
@@ -237,12 +236,21 @@ async def purchase_dataset(
 
     purchase_ref.set(purchase_data)
 
-    # Transaction log
+    # Buyer transaction
     db.collection("transactions").add({
         "user_id": user["id"],
         "dataset_id": body.dataset_id,
         "amount": -price,
         "type": "dataset_purchase",
+        "created_at": datetime.now(timezone.utc)
+    })
+
+    # Seller transaction
+    db.collection("transactions").add({
+        "user_id": dataset["owner_id"],
+        "dataset_id": body.dataset_id,
+        "amount": owner_share,
+        "type": "dataset_sale",
         "created_at": datetime.now(timezone.utc)
     })
 
@@ -291,7 +299,8 @@ async def aggregate_datasets(
         "sample_records": combined_records[:5],
         "is_aggregated": True,
         "created_at": datetime.now(timezone.utc),
-        "download_count": 0
+        "downloads": 0,
+        "price": 0
     }
 
     new_dataset_ref.set(dataset_data)
