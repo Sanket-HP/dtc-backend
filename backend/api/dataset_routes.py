@@ -1,4 +1,4 @@
-"""Dataset upload, listing, preview, download and rating routes – Firebase version."""
+"""Dataset upload, listing and deletion routes – Firebase version."""
 
 from __future__ import annotations
 
@@ -93,6 +93,10 @@ async def upload_dataset(
 ):
 
     content = await file.read()
+
+    # 🚨 File size protection (20MB)
+    if len(content) > 20 * 1024 * 1024:
+        raise HTTPException(400, "File too large. Maximum 20MB allowed.")
 
     rows = parse_file(content, file.filename)
 
@@ -225,7 +229,7 @@ async def list_datasets():
 
 
 # -------------------------------------------------
-# DELETE DATASET (FIXED VERSION)
+# DELETE DATASET
 # -------------------------------------------------
 @router.delete("/{dataset_id}")
 async def delete_dataset(
@@ -246,18 +250,17 @@ async def delete_dataset(
 
     token_reward = dataset.get("token_reward", 0)
 
-    # Prevent deleting sold datasets
+    # prevent deleting purchased datasets
     if dataset.get("downloads", 0) > 0:
-        raise HTTPException(400, "Cannot delete dataset that has been purchased")
+        raise HTTPException(400, "Cannot delete dataset that has downloads")
 
-    # Remove tokens from user wallet
+    # remove tokens
     db.collection("users").document(user_id).update({
         "token_balance": firestore.Increment(-token_reward),
         "tokens_earned": firestore.Increment(-token_reward),
         "datasets_uploaded": firestore.Increment(-1)
     })
 
-    # Add reverse transaction
     db.collection("transactions").add({
         "user_id": user_id,
         "dataset_id": dataset_id,
@@ -266,16 +269,17 @@ async def delete_dataset(
         "created_at": datetime.now(timezone.utc)
     })
 
-    # Delete dataset file from storage
+    # delete storage file safely
     file_url = dataset.get("file_url")
 
     if file_url:
-        filename = file_url.split("/")[-1]
-        blob = bucket.blob(f"datasets/{dataset_id}/{filename}")
-        blob.delete()
+        try:
+            filename = file_url.split("/")[-1].split("?")[0]
+            blob = bucket.blob(f"datasets/{dataset_id}/{filename}")
+            blob.delete()
+        except Exception:
+            pass
 
     doc_ref.delete()
 
-    return {
-        "message": "Dataset deleted successfully"
-    }
+    return {"message": "Dataset deleted successfully"}
