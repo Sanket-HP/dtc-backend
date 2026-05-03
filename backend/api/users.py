@@ -20,7 +20,7 @@ async def get_my_profile(user_id: str = Depends(get_current_user_id)):
     if not doc.exists:
         raise HTTPException(404, "User not found")
 
-    data = doc.to_dict()
+    data = doc.to_dict() or {}
     data["id"] = user_id
 
     return data
@@ -37,7 +37,7 @@ async def get_wallet(user_id: str = Depends(get_current_user_id)):
     if not user_doc.exists:
         raise HTTPException(404, "User not found")
 
-    user = user_doc.to_dict()
+    user = user_doc.to_dict() or {}
 
     transactions = (
         db.collection("transactions")
@@ -48,7 +48,7 @@ async def get_wallet(user_id: str = Depends(get_current_user_id)):
     total_earned = 0
 
     for t in transactions:
-        data = t.to_dict()
+        data = t.to_dict() or {}
         if data.get("type") == "dataset_reward":
             total_earned += data.get("amount", 0)
 
@@ -61,7 +61,7 @@ async def get_wallet(user_id: str = Depends(get_current_user_id)):
 
 
 # -------------------------------------------------
-# USER DATASETS (PAGINATED)
+# USER DATASETS (FOR DASHBOARD)
 # -------------------------------------------------
 @router.get("/datasets")
 async def get_user_datasets(
@@ -72,7 +72,6 @@ async def get_user_datasets(
     docs = (
         db.collection("datasets")
         .where("owner_id", "==", user_id)
-        .order_by("created_at", direction="DESCENDING")
         .limit(limit)
         .stream()
     )
@@ -81,10 +80,25 @@ async def get_user_datasets(
 
     for d in docs:
 
-        data = d.to_dict()
-        data["id"] = d.id
+        data = d.to_dict() or {}
 
-        datasets.append(data)
+        datasets.append({
+            "id": d.id,
+            "title": data.get("title"),
+            "description": data.get("description"),
+            "category": data.get("category"),
+
+            "record_count": data.get("record_count", 0),
+            "quality_score": data.get("quality_score", 0),
+
+            "ai_training_score": data.get("ai_training_score", 0),
+            "dataset_value": data.get("dataset_value", 0),
+            "token_reward": data.get("token_reward", 0),
+
+            "download_count": data.get("download_count", 0),
+
+            "created_at": data.get("created_at")
+        })
 
     return datasets
 
@@ -98,7 +112,6 @@ async def get_transactions(user_id: str = Depends(get_current_user_id)):
     docs = (
         db.collection("transactions")
         .where("user_id", "==", user_id)
-        .order_by("created_at", direction="DESCENDING")
         .limit(50)
         .stream()
     )
@@ -107,7 +120,7 @@ async def get_transactions(user_id: str = Depends(get_current_user_id)):
 
     for d in docs:
 
-        data = d.to_dict()
+        data = d.to_dict() or {}
         data["id"] = d.id
 
         transactions.append(data)
@@ -134,7 +147,7 @@ async def get_reputation(user_id: str = Depends(get_current_user_id)):
 
     for d in docs:
 
-        data = d.to_dict()
+        data = d.to_dict() or {}
 
         total_quality += data.get("quality_score", 0)
         total_ai_score += data.get("ai_training_score", 0)
@@ -155,7 +168,6 @@ async def get_reputation(user_id: str = Depends(get_current_user_id)):
             2
         )
 
-    # Badge system
     badge = "Beginner"
 
     if reputation > 90:
@@ -198,7 +210,7 @@ async def user_analytics(user_id: str = Depends(get_current_user_id)):
 
     for d in docs:
 
-        data = d.to_dict()
+        data = d.to_dict() or {}
 
         dataset_count += 1
         total_records += data.get("record_count", 0)
@@ -224,7 +236,7 @@ async def get_public_profile(user_id: str):
     if not doc.exists:
         raise HTTPException(404, "User not found")
 
-    data = doc.to_dict()
+    data = doc.to_dict() or {}
 
     return {
         "username": data.get("username"),

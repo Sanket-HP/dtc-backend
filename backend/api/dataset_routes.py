@@ -40,6 +40,13 @@ def generate_dataset_hash(rows):
 
 
 # -------------------------------------------------
+# FILE HASH
+# -------------------------------------------------
+def generate_file_hash(content: bytes):
+    return hashlib.sha256(content).hexdigest()
+
+
+# -------------------------------------------------
 # DATASET SIMILARITY
 # -------------------------------------------------
 def dataset_similarity(rows1, rows2):
@@ -148,7 +155,11 @@ async def upload_dataset(
     if len(content) > 20 * 1024 * 1024:
         raise HTTPException(400, "File too large (max 20MB)")
 
-    # Parse dataset
+    file_hash = generate_file_hash(content)
+
+    # -------------------------------------------------
+    # PARSE DATASET
+    # -------------------------------------------------
     if file.filename.endswith(".csv"):
 
         text = content.decode("utf-8")
@@ -170,11 +181,15 @@ async def upload_dataset(
 
     rows = anonymize_dataset(rows)
 
-    # Spam detection
+    # -------------------------------------------------
+    # SPAM DETECTION
+    # -------------------------------------------------
     if is_spam_dataset(rows):
         raise HTTPException(400, "Dataset rejected: spam dataset detected")
 
-    # AI validation
+    # -------------------------------------------------
+    # AI VALIDATION
+    # -------------------------------------------------
     validation = validate_dataset(rows)
 
     if not validation["valid"]:
@@ -183,7 +198,7 @@ async def upload_dataset(
     dataset_hash = generate_dataset_hash(rows)
 
     # -------------------------------------------------
-    # GLOBAL DUPLICATE DETECTION
+    # GLOBAL DUPLICATE CHECK
     # -------------------------------------------------
     existing = (
         db.collection("datasets")
@@ -193,10 +208,10 @@ async def upload_dataset(
     )
 
     if existing:
-        raise HTTPException(400, "This dataset already exists on the platform.")
+        raise HTTPException(400, "Dataset already exists on platform")
 
     # -------------------------------------------------
-    # SIMILAR DATASET DETECTION
+    # SIMILAR DATASET CHECK
     # -------------------------------------------------
     docs = db.collection("datasets").limit(50).stream()
 
@@ -212,7 +227,7 @@ async def upload_dataset(
             if similarity > 0.9:
                 raise HTTPException(
                     400,
-                    "Dataset too similar to existing dataset."
+                    "Dataset too similar to existing dataset"
                 )
 
     # -------------------------------------------------
@@ -251,26 +266,36 @@ async def upload_dataset(
         "title": title,
         "description": description,
         "category": category,
+
         "record_count": record_count,
         "quality_score": quality_score,
         "ai_training_score": ai_score,
         "dataset_value": dataset_value,
         "token_reward": reward,
+
         "trust_score": round((quality_score + ai_score) / 2, 2),
+
         "rating": 0,
         "rating_count": 0,
         "download_count": 0,
         "purchase_count": 0,
+
         "dataset_hash": dataset_hash,
+        "file_hash": file_hash,
+        "original_filename": file.filename,
+
+        "price": dataset_value,
+
         "file_url": file_url,
         "sample_records": rows[:20],
+
         "created_at": datetime.now(timezone.utc)
     }
 
     db.collection("datasets").document(dataset_id).set(dataset_data)
 
     # -------------------------------------------------
-    # UPDATE USER WALLET (ATOMIC)
+    # UPDATE USER WALLET
     # -------------------------------------------------
     user_ref = db.collection("users").document(user_id)
 
