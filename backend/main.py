@@ -29,7 +29,7 @@ from .api.users import router as users_router
 from .api.leaderboard import router as leaderboard_router
 from .api.requests import router as requests_router
 from .api.recommendations import router as recommendations_router
-
+from backend.api.company_routes import router as company_router
 # Token + Treasury routers
 from .api.token_routes import router as token_router
 from .api.treasury_routes import router as treasury_router
@@ -164,7 +164,7 @@ app.include_router(users_router, prefix="/api")
 app.include_router(leaderboard_router, prefix="/api")
 app.include_router(requests_router, prefix="/api")
 app.include_router(recommendations_router, prefix="/api")
-
+app.include_router(company_router)
 # Token economy routes
 app.include_router(token_router, prefix="/api")
 app.include_router(treasury_router, prefix="/api")
